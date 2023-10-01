@@ -21,10 +21,18 @@
     const repo_url = REPO_BASEURL + REPO_NAME;
 
     const git = new _git(repo_url);
-    git.load_tag_ref().then(function(ok) {
-      console.log('found id for tag ' + SELECTED_TAG_NAME);
-      console.table(git.tag_ref[SELECTED_TAG_NAME]);
-    }, function(err) {
+    git.load_tag_ref().then(function(ok_tag) {
+      const selected_tag_id = git.tag_ref[SELECTED_TAG_NAME]['tag_id'];
+      const selected_tag_commit_id = git.tag_ref[SELECTED_TAG_NAME]['commit_id'];
+      this.load_all_packs().then(function(ok_pack) {
+        console.log(SELECTED_TAG_NAME + ': tag-id=' + selected_tag_id
+                    + ', tag-offset=' + this.pack_index[selected_tag_id]['offset']
+                    + ', tag-crc=' + this.pack_index[selected_tag_id]['crc']
+                   );
+      }.bind(this), function(err_pack) {
+        console.error(err_pack);
+      });
+    }.bind(git), function(err_tag) {
       console.error(err);
     });
   </script>
