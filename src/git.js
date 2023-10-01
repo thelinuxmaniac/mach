@@ -11,8 +11,23 @@ Date   : 2023-Oct-01
 function _git(repo_url) {
   this.repo_url = repo_url;
   this.tag_ref = {};
+
+  // git pack data
   this.pack_id = '';
   this.pack_index = {}; // {'offset':..., 'crc':...}
+  this.pack_obj_buffer = new ArrayBuffer(0);
+  this.pack_obj = new Array(0);
+  this.pack_obj_id_to_index = {};
+
+  // defined in https://github.com/git/git/blob/master/object.h
+  this.PACK_OBJECT_TYPE = {
+    OBJ_COMMIT: 1,
+    OBJ_TREE: 2,
+    OBJ_BLOB: 3,
+    OBJ_TAG: 4,
+    OBJ_OFS_DELTA: 6,
+    OBJ_REF_DELTA: 7
+  }
 }
 
 _git.prototype.load_tag_ref = function() {
@@ -56,7 +71,7 @@ _git.prototype.load_tag_ref = function() {
   }.bind(this));
 }
 
-_git.prototype.load_all_packs = function() {
+_git.prototype.load_all_pack_index = function() {
   return new Promise( function(ok_callback, err_callback) {
     const pack_list_url = this.repo_url + '/objects/pack/';
     fetch(pack_list_url, {
@@ -94,7 +109,7 @@ _git.prototype.load_all_packs = function() {
       var fetch_pack_promises = [];
       for(const pack_sha_index in pack_sha_list) {
         const pack_sha = pack_sha_list[pack_sha_index];
-        fetch_pack_promises.push(this.load_pack(pack_sha));
+        fetch_pack_promises.push(this.load_pack_index(pack_sha));
       }
       Promise.all(fetch_pack_promises).then( function(ok) {
         ok_callback(ok);
@@ -105,7 +120,7 @@ _git.prototype.load_all_packs = function() {
   }.bind(this));
 }
 
-_git.prototype.load_pack = function(pack_sha) {
+_git.prototype.load_pack_index = function(pack_sha) {
   return new Promise( function(ok_callback, err_callback) {
     const pack_index_url = this.repo_url + '/objects/pack/pack-' + pack_sha + '.idx';
     fetch(pack_index_url, {
@@ -248,4 +263,118 @@ _git.prototype.ntohl = function(n) {
   one_byte_view[3] = (n & 0x000000FF) >>> 0;
   var four_byte_view = new Uint32Array(buf);
   return four_byte_view[0];
+}
+
+_git.prototype.load_all_pack_object = function() {
+  return new Promise( function(ok_callback, err_callback) {
+    const pack_index_url = this.repo_url + '/objects/pack/pack-' + this.pack_id + '.pack';
+    fetch(pack_index_url, {
+      method: 'GET',
+      cache: 'no-cache',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'Content-Transfer-Encoding': 'binary',
+      },
+    }).then( function(response) {
+      if(response.statusText === 'OK') {
+        return response.arrayBuffer();
+      } else {
+        err_callback(response.statusText);
+      }
+    }.bind(this)).then( function(array_buffer) {
+      this.parse_pack_object(array_buffer).then(function(ok_parse) {
+        ok_callback(ok_parse);
+      }, function(err_parse) {
+        err_callback(err_parse);
+      });
+    }.bind(this));
+  }.bind(this));
+}
+
+// References
+// https://github.com/git/git/blob/bcb6cae2966cc407ca1afc77413b3ef11103c175/builtin/unpack-objects.c
+// https://stefan.saasen.me/articles/git-clone-in-haskell-from-the-bottom-up/#pack-file-format
+_git.prototype.parse_pack_object = function(array_buffer) {
+  return new Promise( function(ok_callback, err_callback) {
+    console.log('Received pack file of size ' + array_buffer.byteLength + ' bytes');
+    this.pack_obj_array_buffer = array_buffer;
+
+    const pack_obj_header = new Uint32Array(array_buffer);
+
+    const PACK_HEADER_SIZE = 12; // bytes
+    const PACK_SIGNATURE = 1346454347;
+    const PACK_VERSION = 2;
+    if(pack_obj_header[0] !== this.htonl(PACK_SIGNATURE)) {
+      err_callback('malformed pack file header: expected=' + PACK_SIGNATURE + ', received=' + pack_obj_header[0]);
+      return;
+    }
+    const version = this.ntohl(pack_obj_header[1]);
+    if(version !== 2) {
+      err_callback('unexpected version number: expected=' + PACK_VERSION + ', received=' + version);
+      return;
+    }
+
+    this.pack_obj_count = this.ntohl(pack_obj_header[2]);
+    console.log('Number of objects in pack file = ' + this.pack_obj_count);
+
+    this.pack_obj_uint8_arr = new Uint8Array(this.pack_obj_array_buffer);
+    this.pack_obj_uint8_offset = PACK_HEADER_SIZE;
+    this.pack_obj = new Array(this.pack_obj_count); // pre-allocate space
+
+    for(var object_index=0; object_index<this.pack_obj_count; ++object_index) {
+      this.unpack_object(object_index);
+    }
+    ok_callback();
+  }.bind(this));
+}
+
+// References
+// https://github.com/git/git/blob/bcb6cae2966cc407ca1afc77413b3ef11103c175/builtin/unpack-objects.c::unpack_one()
+_git.prototype.unpack_object = function(object_index) {
+  this.pack_obj[object_index] = {
+    'offset': this.pack_obj_uint8_offset,
+  };
+  var c = this.pack_obj_uint8_arr[this.pack_obj_uint8_offset];
+  this.pack_obj_uint8_offset += 1;
+  var type = (c >> 4) & 7;
+  var size = (c & 15);
+  var shift = 4;
+  while (c & parseInt('0x80', 16)) {
+    c = this.pack_obj_uint8_arr[this.pack_obj_uint8_offset];
+    this.pack_obj_uint8_offset += 1;
+    size += (c & parseInt('0x7f', 16)) << shift;
+    shift += 7;
+  }
+
+  const object_type_name = this.pack_object_type_id_to_str(type);
+
+  switch(type) {
+  case this.PACK_OBJECT_TYPE.OBJ_BLOB:
+  case this.PACK_OBJECT_TYPE.OBJ_COMMIT:
+  case this.PACK_OBJECT_TYPE.OBJ_TREE:
+  case this.PACK_OBJECT_TYPE.OBJ_TAG:
+    this.unpack_non_delta_object_entry(type, size, object_index);
+    break;
+  case this.PACK_OBJECT_TYPE.OBJ_REF_DELTA:
+  case this.PACK_OBJECT_TYPE.OBJ_OFS_DELTA:
+    this.unpack_delta_object_entry(type, size, object_index);
+    break;
+  }
+}
+
+_git.prototype.unpack_non_delta_object_entry = function(type, size, index) {
+  // todo: inflate the z-lib compressed object data and store in this.pack_obj[index]
+}
+
+_git.prototype.unpack_delta_object_entry = function(type, size, index) {
+  // todo: inflate the z-lib compressed object data and store in this.pack_obj[index]
+}
+
+_git.prototype.pack_object_type_id_to_str = function(object_type_id) {
+  for(object_type_str in this.PACK_OBJECT_TYPE) {
+    if(this.PACK_OBJECT_TYPE[object_type_str] === object_type_id) {
+      return object_type_str;
+    }
+  }
+  return 'UNKNOWN-ID (' + object_type_id + ')';
 }

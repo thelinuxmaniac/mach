@@ -24,11 +24,16 @@
     git.load_tag_ref().then(function(ok_tag) {
       const selected_tag_id = git.tag_ref[SELECTED_TAG_NAME]['tag_id'];
       const selected_tag_commit_id = git.tag_ref[SELECTED_TAG_NAME]['commit_id'];
-      this.load_all_packs().then(function(ok_pack) {
+      this.load_all_pack_index().then(function(ok_pack) {
+        if(ok_pack.length == 0 || typeof(ok_pack[0]) == 'undefined') {
+          console.error('failed to load pack index');
+          return;
+        }
         console.log(SELECTED_TAG_NAME + ': tag-id=' + selected_tag_id
                     + ', tag-offset=' + this.pack_index[selected_tag_id]['offset']
                     + ', tag-crc=' + this.pack_index[selected_tag_id]['crc']
                    );
+        this.load_all_pack_object();
       }.bind(this), function(err_pack) {
         console.error(err_pack);
       });
