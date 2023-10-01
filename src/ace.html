@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="author" content="Abhishek Dutta">
+    <meta name="description" content="A software tool to manually annotate and analyse the evolution of software program code contained in a code repository.">
+    <title>Analysis of Code Evolution (ACE)</title>
+  </head>
+  <body>
+    <h1>Analysis of Code Evolution (ACE)</h1>
+    <select id="tag_list"></select>
+  </body>
+
+  <script src="git.js"></script>
+
+  <script>
+    const REPO_BASEURL = '../repo/';
+    const REPO_NAME = 'coreutils.git';
+    const SELECTED_TAG_NAME = 'refs/tags/v8.3';
+
+    const repo_url = REPO_BASEURL + REPO_NAME;
+
+    const git = new _git(repo_url);
+    git.load_tag_ref().then(function(ok) {
+      console.log('found id for tag ' + SELECTED_TAG_NAME);
+      console.table(git.tag_ref[SELECTED_TAG_NAME]);
+    }, function(err) {
+      console.error(err);
+    });
+  </script>
+</html>
