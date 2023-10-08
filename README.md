@@ -1,4 +1,4 @@
-# Analysis of Code Evolution (ACE)
+# Analysis (or Annotation) of Code Evolution (ACE)
 
 ACE is a software tool to manually annotate different stages
 (e.g. commits in a version control system) of evolution of a software
