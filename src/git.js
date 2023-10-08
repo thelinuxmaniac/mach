@@ -15,8 +15,8 @@ function _git(repo_url) {
   // git pack data
   this.pack_id = '';
   this.pack_index = {}; // {'offset':..., 'crc':...}
+  this.pack_obj_offset_list = new Array(0);
   this.pack_obj_buffer = new ArrayBuffer(0);
-  this.pack_obj = new Array(0);
   this.pack_obj_id_to_index = {};
 
   // defined in https://github.com/git/git/blob/master/object.h
@@ -194,6 +194,7 @@ _git.prototype.parse_pack_index = function(array_buffer) {
     var crc = [];
     var off = [];
     var off64_nr = 0;
+    this.pack_obj_offset_list = new Array(nr);
 
     // read id (i.e. hash of each object)
     var index_to_id = [];
@@ -233,8 +234,12 @@ _git.prototype.parse_pack_index = function(array_buffer) {
       const off_uint32_array = new Uint32Array(offset_buf);
       const id = index_to_id[i];
       this.pack_index[id]['offset'] = this.ntohl(off_uint32_array[0]);
+      this.pack_obj_offset_list[i] = parseInt(this.ntohl(off_uint32_array[0]));
       uint8_offset += OFFSET_SIZE;
     }
+    this.pack_obj_offset_list.sort( function(a, b) {
+      return a-b;
+    });
     ok_callback(nr);
   }.bind(this));
 }
@@ -296,7 +301,6 @@ _git.prototype.load_all_pack_object = function() {
 // https://stefan.saasen.me/articles/git-clone-in-haskell-from-the-bottom-up/#pack-file-format
 _git.prototype.parse_pack_object = function(array_buffer) {
   return new Promise( function(ok_callback, err_callback) {
-    console.log('Received pack file of size ' + array_buffer.byteLength + ' bytes');
     this.pack_obj_array_buffer = array_buffer;
 
     const pack_obj_header = new Uint32Array(array_buffer);
@@ -315,59 +319,82 @@ _git.prototype.parse_pack_object = function(array_buffer) {
     }
 
     this.pack_obj_count = this.ntohl(pack_obj_header[2]);
-    console.log('Number of objects in pack file = ' + this.pack_obj_count);
 
     this.pack_obj_uint8_arr = new Uint8Array(this.pack_obj_array_buffer);
     this.pack_obj_uint8_offset = PACK_HEADER_SIZE;
-    this.pack_obj = new Array(this.pack_obj_count); // pre-allocate space
-
-    for(var object_index=0; object_index<this.pack_obj_count; ++object_index) {
-      this.unpack_object(object_index);
-    }
-    ok_callback();
+    ok_callback(array_buffer.byteLength, this.pack_obj_count);
   }.bind(this));
 }
 
 // References
-// https://github.com/git/git/blob/bcb6cae2966cc407ca1afc77413b3ef11103c175/builtin/unpack-objects.c::unpack_one()
-_git.prototype.unpack_object = function(object_index) {
-  this.pack_obj[object_index] = {
-    'offset': this.pack_obj_uint8_offset,
-  };
-  var c = this.pack_obj_uint8_arr[this.pack_obj_uint8_offset];
-  this.pack_obj_uint8_offset += 1;
-  var type = (c >> 4) & 7;
-  var size = (c & 15);
-  var shift = 4;
-  while (c & parseInt('0x80', 16)) {
-    c = this.pack_obj_uint8_arr[this.pack_obj_uint8_offset];
-    this.pack_obj_uint8_offset += 1;
-    size += (c & parseInt('0x7f', 16)) << shift;
-    shift += 7;
-  }
+// - https://github.com/git/git/blob/bcb6cae2966cc407ca1afc77413b3ef11103c175/builtin/unpack-objects.c::unpack_one()
+_git.prototype.load_object = function(id, pack_offset) {
+  return new Promise(function(ok_callback, err_callback) {
+    // The first byte is structured as follows:
+    // MSB : is set to indicate that object size value overflows into the next byte
+    // 3 bits  : object type
+    // 4 bites : size (partial size if MSB is set to 1)
+    var offset = pack_offset;
+    const byte1 = this.pack_obj_uint8_arr[offset];
+    offset += 1;
 
-  const object_type_name = this.pack_object_type_id_to_str(type);
+    var type = (byte1 >> 4) & 7; // extract the 3 bits holding type information
+    var object_size = (byte1 & 15);
+    var shift = 4;
+    var byte_k = byte1;
+    while (byte_k & parseInt('0x80', 16)) {
+      byte_k = this.pack_obj_uint8_arr[offset];
+      offset += 1;
+      object_size += ( (byte_k & parseInt('0x7f', 16)) << shift );
+      shift += 7;
+    }
 
-  switch(type) {
-  case this.PACK_OBJECT_TYPE.OBJ_BLOB:
-  case this.PACK_OBJECT_TYPE.OBJ_COMMIT:
-  case this.PACK_OBJECT_TYPE.OBJ_TREE:
-  case this.PACK_OBJECT_TYPE.OBJ_TAG:
-    this.unpack_non_delta_object_entry(type, size, object_index);
-    break;
-  case this.PACK_OBJECT_TYPE.OBJ_REF_DELTA:
-  case this.PACK_OBJECT_TYPE.OBJ_OFS_DELTA:
-    this.unpack_delta_object_entry(type, size, object_index);
-    break;
-  }
-}
+    const object_type_name = this.pack_object_type_id_to_str(type);
 
-_git.prototype.unpack_non_delta_object_entry = function(type, size, index) {
-  // todo: inflate the z-lib compressed object data and store in this.pack_obj[index]
-}
+    const zlib_byte1 = this.pack_obj_uint8_arr[offset];
+    if(zlib_byte1 !== parseInt('0x78', 16)) {
+      console.error('malformed header of zlib compressed object: expected 0x78, got ' + zlib_byte1.toString(16));
+      err_callback(zlib_byte1);
+      return;
+    }
 
-_git.prototype.unpack_delta_object_entry = function(type, size, index) {
-  // todo: inflate the z-lib compressed object data and store in this.pack_obj[index]
+    // The pack files only contains the size of uncompressed data and
+    // does not contain the size of compressed zlib data. So, we do
+    // not know how many bytes to provide to the DecompressionStream().
+    // If any extra bytes are supplied to the browser's zlib decompression
+    // algorithm, the following error gets raised
+    //     "Unexpected input after the end of stream"
+    // To solve this, we create a sorted list of all offset values obtained
+    // from the pack index file and compute the size of zlib data based on
+    // the difference between consecutive offset values.
+
+    const pack_offset_index = this.pack_obj_offset_list.indexOf(pack_offset);
+    const next_offset_index = pack_offset_index + 1;
+    const pack_next_offset = this.pack_obj_offset_list[next_offset_index];
+
+    const OBJECT_HEADER_SIZE = 2; // in bytes
+    const zlib_data_size = (pack_next_offset - pack_offset) - OBJECT_HEADER_SIZE;
+    var obj_arr_uint8 = new Uint8Array(this.pack_obj_array_buffer.slice(offset, offset + zlib_data_size));
+
+    const pack_blob = new Blob([ obj_arr_uint8 ])
+    const ds = new DecompressionStream("deflate");
+    const decompressedStream = pack_blob.stream().pipeThrough(ds);
+    const response = new Response(decompressedStream).blob();
+    response.then( function(object_blob) {
+      if(object_blob.size !== object_size) {
+        const err_msg = 'Inflated object size mismatch: expected=' + object_size + ', received=' + object_blob.size;
+        err_callback(err_msg);
+      } else {
+        object_blob.text().then(function(object_text) {
+          ok_callback(object_text);
+        }, function(err_text) {
+          err_callback(err_text);
+        });
+      }
+    }, function(err) {
+      err_callback(err);
+    });
+  }.bind(this));
 }
 
 _git.prototype.pack_object_type_id_to_str = function(object_type_id) {

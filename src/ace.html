@@ -14,6 +14,13 @@
   <script src="git.js"></script>
 
   <script>
+    if(!window.DecompressionStream) {
+      // TODO: use zlib library (Javascript version) to inflate the data
+      const error_msg = 'Upgrade your browser to the latest version (e.g. Firefox 113, Chrome 80) because the DecompressionStream API not available this browser which is required to inflate zlib compressed objects stored in git pack files.';
+      window.alert(error_msg);
+      throw new Error(error_msg);
+    }
+
     const REPO_BASEURL = '../repo/';
     const REPO_NAME = 'coreutils.git';
     const SELECTED_TAG_NAME = 'refs/tags/v8.3';
@@ -29,11 +36,24 @@
           console.error('failed to load pack index');
           return;
         }
+        console.log('loaded git pack index');
         console.log(SELECTED_TAG_NAME + ': tag-id=' + selected_tag_id
                     + ', tag-offset=' + this.pack_index[selected_tag_id]['offset']
                     + ', tag-crc=' + this.pack_index[selected_tag_id]['crc']
                    );
-        this.load_all_pack_object();
+        this.load_all_pack_object().then(function(pack_byte_length, pack_obj_count) {
+          console.log('loaded git pack of size ' + pack_byte_length + ' bytes containing ' + pack_obj_count + ' objects.');
+          const selected_tag_id = git.tag_ref[SELECTED_TAG_NAME]['tag_id'];
+          const tag_offset = this.pack_index[selected_tag_id]['offset'];
+          this.load_object(selected_tag_id, tag_offset).then(function(object_text) {
+            console.log('showing object content for ' + SELECTED_TAG_NAME);
+            console.log(object_text)
+          }, function(err_load_obj) {
+            console.error(err_load_obj);
+          });
+        }.bind(this), function(err_pack_obj) {
+          console.error(err_pack_obj);
+        });
       }.bind(this), function(err_pack) {
         console.error(err_pack);
       });
