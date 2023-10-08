@@ -41,7 +41,9 @@
                     + ', tag-offset=' + this.pack_index[selected_tag_id]['offset']
                     + ', tag-crc=' + this.pack_index[selected_tag_id]['crc']
                    );
-        this.load_all_pack_object().then(function(pack_byte_length, pack_obj_count) {
+        this.load_all_pack_object().then(function(stat) {
+          const pack_byte_length = stat.pack_byte_length;
+          const pack_obj_count = stat.pack_obj_count;
           console.log('loaded git pack of size ' + pack_byte_length + ' bytes containing ' + pack_obj_count + ' objects.');
           const selected_tag_id = git.tag_ref[SELECTED_TAG_NAME]['tag_id'];
           const tag_offset = this.pack_index[selected_tag_id]['offset'];

@@ -287,9 +287,9 @@ _git.prototype.load_all_pack_object = function() {
         err_callback(response.statusText);
       }
     }.bind(this)).then( function(array_buffer) {
-      this.parse_pack_object(array_buffer).then(function(ok_parse) {
-        ok_callback(ok_parse);
-      }, function(err_parse) {
+      this.parse_pack_object(array_buffer).then(function(pack_obj_stat) {
+        ok_callback(pack_obj_stat);
+      }.bind(this), function(err_parse) {
         err_callback(err_parse);
       });
     }.bind(this));
@@ -322,7 +322,10 @@ _git.prototype.parse_pack_object = function(array_buffer) {
 
     this.pack_obj_uint8_arr = new Uint8Array(this.pack_obj_array_buffer);
     this.pack_obj_uint8_offset = PACK_HEADER_SIZE;
-    ok_callback(array_buffer.byteLength, this.pack_obj_count);
+    ok_callback({
+      'pack_byte_length':array_buffer.byteLength,
+      'pack_obj_count':this.pack_obj_count
+    });
   }.bind(this));
 }
 
