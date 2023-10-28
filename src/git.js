@@ -14,10 +14,12 @@ function _git(repo_url) {
 
   // git pack data
   this.pack_id = '';
-  this.pack_index = {}; // {'offset':..., 'crc':...}
+  this.pack_obj_id_list = new Array(0);
   this.pack_obj_offset_list = new Array(0);
-  this.pack_obj_buffer = new ArrayBuffer(0);
-  this.pack_obj_id_to_index = {};
+  this.pack_obj_crc_list = new Array(0);
+
+  this.pack_obj_array_buffer = new ArrayBuffer(0);
+  this.pack_obj_uint8_arr = new Uint8Array(0);
 
   // defined in https://github.com/git/git/blob/master/object.h
   this.PACK_OBJECT_TYPE = {
@@ -28,11 +30,11 @@ function _git(repo_url) {
     OBJ_OFS_DELTA: 6,
     OBJ_REF_DELTA: 7
   }
+  this.OBJECT_HEADER_SIZE = 2; // in bytes
 }
 
 _git.prototype.load_tag_ref = function() {
   return new Promise( function(ok_callback, err_callback) {
-    console.log(this.repo_url)
     const packed_ref_url = this.repo_url + '/packed-refs';
     fetch(packed_ref_url, {
       method: 'GET',
@@ -64,7 +66,8 @@ _git.prototype.load_tag_ref = function() {
           }
         }
       }
-      ok_callback( Object.keys(this.tag_ref).length );
+      this.tag_ref_count = Object.keys(this.tag_ref).length;
+      ok_callback(this.tag_ref_count);
     }.bind(this)).catch( function(err) {
       err_callback(err);
     });
@@ -194,20 +197,25 @@ _git.prototype.parse_pack_index = function(array_buffer) {
     var crc = [];
     var off = [];
     var off64_nr = 0;
+    this.pack_obj_id_list = new Array(nr);
     this.pack_obj_offset_list = new Array(nr);
-
+    this.pack_obj_crc_list = new Array(nr);
     // read id (i.e. hash of each object)
-    var index_to_id = [];
     for(var i=0; i<nr; ++i) {
       var id_buf = new ArrayBuffer(HASH_SIZE);
       var id = '';
       const hash_uint8_array = new Uint8Array(id_buf);
       for(var j=0; j<HASH_SIZE; ++j) {
         hash_uint8_array[j] = uint8_array[uint8_offset + j];
-        id += hash_uint8_array[j].toString(16);
+        var hex_value = hash_uint8_array[j].toString(16);
+        if(hex_value.length < 2) {
+          // add padding to values (e.g. 11 -> 0b)
+          id += '0' + hex_value;
+        } else {
+          id += hex_value;
+        }
       }
-      this.pack_index[id] = { 'offset':-1, 'crc':'' };
-      index_to_id[i] = id;
+      this.pack_obj_id_list[i] = id;
       uint8_offset += HASH_SIZE;
     }
 
@@ -219,8 +227,7 @@ _git.prototype.parse_pack_index = function(array_buffer) {
         crc_uint8_array[j] = uint8_array[uint8_offset + j];
       }
       const crc_uint32_array = new Uint32Array(crc_buf);
-      const id = index_to_id[i];
-      this.pack_index[id]['crc'] = this.ntohl(crc_uint32_array[0]).toString(16);
+      this.pack_obj_crc_list[i] = this.ntohl(crc_uint32_array[0]).toString(16);
       uint8_offset += CRC_SIZE;
     }
 
@@ -232,12 +239,14 @@ _git.prototype.parse_pack_index = function(array_buffer) {
         off_uint8_array[j] = uint8_array[uint8_offset + j];
       }
       const off_uint32_array = new Uint32Array(offset_buf);
-      const id = index_to_id[i];
-      this.pack_index[id]['offset'] = this.ntohl(off_uint32_array[0]);
       this.pack_obj_offset_list[i] = parseInt(this.ntohl(off_uint32_array[0]));
       uint8_offset += OFFSET_SIZE;
     }
-    this.pack_obj_offset_list.sort( function(a, b) {
+
+    // (this.pack_obj_id_list, this.pack_obj_offset_list) are sorted based on object-id
+    // we maintain a sorted list of offset values so that we can determine the size of
+    // each object-id
+    this.pack_obj_offset_sorted_list = this.pack_obj_offset_list.toSorted(function(a, b) {
       return a-b;
     });
     ok_callback(nr);
@@ -318,14 +327,13 @@ _git.prototype.parse_pack_object = function(array_buffer) {
       return;
     }
 
-    this.pack_obj_count = this.ntohl(pack_obj_header[2]);
-
+    const pack_obj_count = this.ntohl(pack_obj_header[2]);
+    if(pack_obj_count !== this.pack_obj_id_list.length) {
+      err_callback('mismatch between pack object count in index file and object file!');
+      return;
+    }
     this.pack_obj_uint8_arr = new Uint8Array(this.pack_obj_array_buffer);
-    this.pack_obj_uint8_offset = PACK_HEADER_SIZE;
-    ok_callback({
-      'pack_byte_length':array_buffer.byteLength,
-      'pack_obj_count':this.pack_obj_count
-    });
+    ok_callback(array_buffer.byteLength);
   }.bind(this));
 }
 
@@ -352,8 +360,65 @@ _git.prototype.load_object = function(id, pack_offset) {
       shift += 7;
     }
 
-    const object_type_name = this.pack_object_type_id_to_str(type);
+    switch(type) {
+    case this.PACK_OBJECT_TYPE.OBJ_COMMIT:
+    case this.PACK_OBJECT_TYPE.OBJ_TREE:
+    case this.PACK_OBJECT_TYPE.OBJ_BLOB:
+    case this.PACK_OBJECT_TYPE.OBJ_TAG:
+      this.unpack_non_delta_entry(id, pack_offset, type, object_size).then(function(object_text) {
+        ok_callback(object_text);
+      }, function(obj_err) {
+        err_callback(obj_err);
+      });
+      break;
+    case this.PACK_OBJECT_TYPE.OBJ_OFS_DELTA:
+    case this.PACK_OBJECT_TYPE.OBJ_REF_DELTA:
+      this.unpack_delta_entry(id, pack_offset, type, object_size).then(function(object_text) {
+        ok_callback(object_text);
+      }, function(obj_err) {
+        err_callback(obj_err);
+      });
+      break;
+    default:
+      err_callback('unknown object type ' + type);
+    }
+  }.bind(this));
+}
 
+_git.prototype.pack_obj_id_to_index = function(id) {
+  var low = 0;
+  var high = this.pack_obj_id_list.length;
+  while(low < high) {
+    const mid = low + parseInt((high - low) / 2.0);
+    if(id < this.pack_obj_id_list[mid]) {
+      high = mid;
+    } else if (id > this.pack_obj_id_list[mid]) {
+      low = mid + 1;
+    } else {
+      return mid;
+    }
+  }
+}
+
+_git.prototype.pack_obj_offset_to_index = function(pack_offset) {
+  var low = 0;
+  var high = this.pack_obj_id_list.length;
+  while(low < high) {
+    const mid = low + parseInt((high - low) / 2.0);
+    if(pack_offset < this.pack_obj_offset_sorted_list[mid]) {
+      high = mid;
+    } else if (pack_offset > this.pack_obj_offset_sorted_list[mid]) {
+      low = mid + 1;
+    } else {
+      return mid;
+    }
+  }
+}
+
+_git.prototype.unpack_non_delta_entry = function(id, pack_offset, type, object_size) {
+  return new Promise(function(ok_callback, err_callback) {
+    const object_type_name = this.pack_object_type_id_to_str(type);
+    const offset = pack_offset + this.OBJECT_HEADER_SIZE;
     const zlib_byte1 = this.pack_obj_uint8_arr[offset];
     if(zlib_byte1 !== parseInt('0x78', 16)) {
       console.error('malformed header of zlib compressed object: expected 0x78, got ' + zlib_byte1.toString(16));
@@ -370,15 +435,14 @@ _git.prototype.load_object = function(id, pack_offset) {
     // To solve this, we create a sorted list of all offset values obtained
     // from the pack index file and compute the size of zlib data based on
     // the difference between consecutive offset values.
+    const id_index = this.pack_obj_id_to_index(id);
+    const id_offset = this.pack_obj_offset_list[id_index];
+    const sorted_offset_index = this.pack_obj_offset_to_index(id_offset);
+    const next_sorted_offset_index = sorted_offset_index + 1;
+    const next_offset = this.pack_obj_offset_sorted_list[next_sorted_offset_index];
 
-    const pack_offset_index = this.pack_obj_offset_list.indexOf(pack_offset);
-    const next_offset_index = pack_offset_index + 1;
-    const pack_next_offset = this.pack_obj_offset_list[next_offset_index];
-
-    const OBJECT_HEADER_SIZE = 2; // in bytes
-    const zlib_data_size = (pack_next_offset - pack_offset) - OBJECT_HEADER_SIZE;
+    const zlib_data_size = (next_offset - pack_offset) - this.OBJECT_HEADER_SIZE;
     var obj_arr_uint8 = new Uint8Array(this.pack_obj_array_buffer.slice(offset, offset + zlib_data_size));
-
     const pack_blob = new Blob([ obj_arr_uint8 ])
     const ds = new DecompressionStream("deflate");
     const decompressedStream = pack_blob.stream().pipeThrough(ds);
@@ -394,17 +458,14 @@ _git.prototype.load_object = function(id, pack_offset) {
           err_callback(err_text);
         });
       }
-    }, function(err) {
+    }.bind(this), function(err) {
       err_callback(err);
     });
   }.bind(this));
 }
 
-_git.prototype.pack_object_type_id_to_str = function(object_type_id) {
-  for(object_type_str in this.PACK_OBJECT_TYPE) {
-    if(this.PACK_OBJECT_TYPE[object_type_str] === object_type_id) {
-      return object_type_str;
-    }
-  }
-  return 'UNKNOWN-ID (' + object_type_id + ')';
+_git.prototype.unpack_delta_entry = function(id, pack_offset, type, delta_size) {
+  return new Promise(function(ok_callback, err_callback) {
+    console.log('TODO');
+  }.bind(this));
 }
