@@ -317,8 +317,8 @@ _git.prototype.load_all_pack_object = function() {
         err_callback(response.statusText);
       }
     }.bind(this)).then( function(array_buffer) {
-      this.parse_pack_object(array_buffer).then(function(pack_obj_stat) {
-        ok_callback(pack_obj_stat);
+      this.parse_pack_object(array_buffer).then(function(pack_size_in_bytes) {
+        ok_callback(pack_size_in_bytes);
       }.bind(this), function(err_parse) {
         err_callback(err_parse);
       });
