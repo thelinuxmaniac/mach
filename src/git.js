@@ -31,6 +31,19 @@ function _git(repo_url) {
     OBJ_REF_DELTA: 7
   }
   this.OBJECT_HEADER_SIZE = 2; // in bytes
+  this.HASH_SIZE = 20; // sha1 is 160 bits = 20 bytes
+
+  this.byte_to_hex = new Array(256);
+
+  // initialise the module
+  this._init();
+}
+
+_git.prototype._init = function() {
+  // https://stackoverflow.com/a/55200387
+  for(var i=0; i<= 0xff; ++i) {
+    this.byte_to_hex[i] = i.toString(16).padStart(2, '0');
+  }
 }
 
 _git.prototype.load_tag_ref = function() {
@@ -157,7 +170,6 @@ _git.prototype.parse_pack_index = function(array_buffer) {
   return new Promise( function(ok_callback, err_callback) {
     const PACK_IDX_SIGNATURE = Number('0xff744f63'); // in host byte order (Little Endian)
     const SIGNATURE_UINT32_SIZE = 2; // 2 * 4 bytes
-    const HASH_SIZE = 20; // sha1 is 160 bits = 20 bytes
     const CRC_SIZE = 4; // 4 bytes
     const OFFSET_SIZE = 4; // 4 bytes
     var uint8_offset = 0; // reading from beginning of the array buffer
@@ -202,10 +214,10 @@ _git.prototype.parse_pack_index = function(array_buffer) {
     this.pack_obj_crc_list = new Array(nr);
     // read id (i.e. hash of each object)
     for(var i=0; i<nr; ++i) {
-      var id_buf = new ArrayBuffer(HASH_SIZE);
+      var id_buf = new ArrayBuffer(this.HASH_SIZE);
       var id = '';
       const hash_uint8_array = new Uint8Array(id_buf);
-      for(var j=0; j<HASH_SIZE; ++j) {
+      for(var j=0; j<this.HASH_SIZE; ++j) {
         hash_uint8_array[j] = uint8_array[uint8_offset + j];
         var hex_value = hash_uint8_array[j].toString(16);
         if(hex_value.length < 2) {
@@ -216,7 +228,7 @@ _git.prototype.parse_pack_index = function(array_buffer) {
         }
       }
       this.pack_obj_id_list[i] = id;
-      uint8_offset += HASH_SIZE;
+      uint8_offset += this.HASH_SIZE;
     }
 
     // read crc
@@ -246,8 +258,17 @@ _git.prototype.parse_pack_index = function(array_buffer) {
     // (this.pack_obj_id_list, this.pack_obj_offset_list) are sorted based on object-id
     // we maintain a sorted list of offset values so that we can determine the size of
     // each object-id
-    this.pack_obj_offset_sorted_list = this.pack_obj_offset_list.toSorted(function(a, b) {
-      return a-b;
+    this.pack_obj_offset_sorted_list = new Array(nr);
+    for(var i=0; i<nr; ++i) {
+      this.pack_obj_offset_sorted_list[i] = [ i, this.pack_obj_offset_list[i] ];
+    }
+    this.pack_obj_offset_sorted_list.sort( function(a, b) {
+      if(a[1] < b[1]) {
+        return -1;
+      } else if(a[1] > b[1]) {
+        return 1;
+      }
+      return 0;
     });
     ok_callback(nr);
   }.bind(this));
@@ -365,25 +386,384 @@ _git.prototype.load_object = function(id, pack_offset) {
     case this.PACK_OBJECT_TYPE.OBJ_TREE:
     case this.PACK_OBJECT_TYPE.OBJ_BLOB:
     case this.PACK_OBJECT_TYPE.OBJ_TAG:
-      this.unpack_non_delta_entry(id, pack_offset, type, object_size).then(function(object_text) {
-        ok_callback(object_text);
+      this.unpack_non_delta_entry(id, offset, type, object_size).then(function(object_buf) {
+        ok_callback(object_buf);
       }, function(obj_err) {
         err_callback(obj_err);
       });
       break;
     case this.PACK_OBJECT_TYPE.OBJ_OFS_DELTA:
-    case this.PACK_OBJECT_TYPE.OBJ_REF_DELTA:
-      this.unpack_delta_entry(id, pack_offset, type, object_size).then(function(object_text) {
+      const delta_data_size = object_size; // size of data after negative offset
+      this.unpack_offset_delta_entry(id, pack_offset, delta_data_size).then(function(object_text) {
         ok_callback(object_text);
       }, function(obj_err) {
         err_callback(obj_err);
       });
+      break;
+    case this.PACK_OBJECT_TYPE.OBJ_REF_DELTA:
+      console.error('decoding of object type OBJ_REF_DELTA not supported!');
       break;
     default:
       err_callback('unknown object type ' + type);
     }
   }.bind(this));
 }
+
+_git.prototype.unpack_non_delta_entry = function(id, zlib_data_offset, type, object_size, ) {
+  return new Promise(function(ok_callback, err_callback) {
+    const offset = zlib_data_offset;
+    const zlib_byte1 = this.pack_obj_uint8_arr[offset];
+    if(zlib_byte1 !== parseInt('0x78', 16)) {
+      console.error('malformed header of zlib compressed object: expected 0x78, got ' + zlib_byte1.toString(16));
+      err_callback(zlib_byte1);
+      return;
+    }
+
+    // The pack files only contains the size of uncompressed data and
+    // does not contain the size of compressed zlib data. So, we do
+    // not know how many bytes to provide to the DecompressionStream().
+    // If any extra bytes are supplied to the browser's zlib decompression
+    // algorithm, the following error gets raised
+    //     "Unexpected input after the end of stream"
+    // To solve this, we create a sorted list of all offset values obtained
+    // from the pack index file and compute the size of zlib data based on
+    // the difference between consecutive offset values.
+    const id_index = this.pack_obj_id_to_index(id);
+    const id_offset = this.pack_obj_offset_list[id_index];
+    const sorted_offset_index = this.pack_obj_offset_to_sorted_index(id_offset);
+    const next_sorted_offset_index = sorted_offset_index + 1;
+    const next_offset = this.pack_obj_offset_sorted_list[next_sorted_offset_index][1];
+
+    const zlib_data_size = (next_offset - zlib_data_offset);
+    var obj_arr_uint8 = new Uint8Array(this.pack_obj_array_buffer.slice(offset, offset + zlib_data_size));
+    const pack_blob = new Blob([ obj_arr_uint8 ])
+    const ds = new DecompressionStream("deflate");
+    const decompressedStream = pack_blob.stream().pipeThrough(ds);
+    const response = new Response(decompressedStream).blob();
+    response.then( function(object_blob) {
+      if(object_blob.size !== object_size) {
+        const err_msg = 'Inflated object size mismatch: expected=' + object_size + ', received=' + object_blob.size;
+        err_callback(err_msg);
+      } else {
+        object_blob.arrayBuffer().then(function(object_buf) {
+          ok_callback(object_buf);
+        }, function(err_text) {
+          err_callback(err_text);
+        });
+      }
+    }.bind(this), function(err) {
+      err_callback(err);
+    });
+  }.bind(this));
+}
+
+_git.prototype.inflate_pack_obj_data = function(offset, size, deflate_size) {
+  return new Promise(function(ok_callback, err_callback) {
+    var obj_uint8_arr = new Uint8Array(this.pack_obj_array_buffer.slice(offset, offset + size));
+    const zlib_byte1 = obj_uint8_arr[0]
+    if(zlib_byte1 !== parseInt('0x78', 16)) {
+      console.error('malformed header of zlib compressed object: expected 0x78, got ' + zlib_byte1.toString(16));
+      err_callback(zlib_byte1);
+      return;
+    }
+
+    const pack_blob = new Blob([ obj_uint8_arr ]);
+    const ds = new DecompressionStream("deflate");
+    const decompressedStream = pack_blob.stream().pipeThrough(ds);
+    const response = new Response(decompressedStream).blob();
+    response.then( function(object_blob) {
+      if(object_blob.size !== deflate_size) {
+        const err_msg = 'Inflated object size mismatch: expected=' + deflate_size + ', received=' + object_blob.size;
+        err_callback(err_msg);
+      } else {
+        object_blob.arrayBuffer().then(function(object_buf) {
+          ok_callback(object_buf);
+        }, function(err_text) {
+          err_callback(err_text);
+        });
+      }
+    }.bind(this), function(err) {
+      err_callback(err);
+    });
+  }.bind(this));
+}
+
+_git.prototype.unpack_offset_delta_entry = function(id, pack_offset, delta_data_size) {
+  return new Promise(function(ok_callback, err_callback) {
+    const delta_offset = pack_offset;
+    const delta_metadata = this.load_object_metadata(id, pack_offset);
+    const delta_size_in_packfile = delta_metadata['object_zlib_data_size'];
+
+    var offset = pack_offset + this.OBJECT_HEADER_SIZE;
+
+    // 1. Find negative offset for base object
+    // The delta object contains instructions (COPY, INSERT) to
+    // create the final object data. The COPY instruction corresponds
+    // to the content of base object while the INSERT instruction
+    // corresponds to the data contained in the delta object
+    var byte_k = this.pack_obj_uint8_arr[offset];
+    offset += 1;
+    var negative_offset = byte_k & parseInt('0x7f', 16); // extract lower 7 bits
+    while (byte_k & parseInt('0x80', 16)) { // MSB = 1 indicates info overflow to next byte
+      negative_offset += 1;
+      byte_k = this.pack_obj_uint8_arr[offset];
+      offset += 1;
+      negative_offset = (negative_offset << 7) + ( byte_k & parseInt('0x7f', 16) );
+    }
+    const delta_data_offset = offset;
+    const id_index = this.pack_obj_id_to_index(id);
+    const base_offset = this.pack_obj_offset_list[id_index] - negative_offset;
+
+    // find the base_id based on base_offset using binary search
+    const base_offset_index = this.pack_obj_offset_to_index(base_offset);
+    const base_id = this.pack_obj_id_list[base_offset_index];
+    const base_metadata = this.load_object_metadata(base_id, base_offset);
+    const base_size = base_metadata['object_size'];
+    const base_type = base_metadata['object_type_id'];
+    const base_packfile_size = base_metadata['object_zlib_data_size'];
+
+    // 2. parse delta data for COPY/INSERT instructions
+    // should be COPY, INSERT
+    // see https://github.com/git/git/blob/011b648646fcf1f467336ac6bbf46145501c0f12/Documentation/technical/pack-format.txt#L39
+    this.load_object(base_id, base_offset).then(function(base_data_arr_buf) {
+      const base_data_uint8 = new Uint8Array(base_data_arr_buf);
+
+      const decoder = new TextDecoder();
+      const id_index = this.pack_obj_id_to_index(id);
+      const id_offset = this.pack_obj_offset_list[id_index];
+      const sorted_offset_index = this.pack_obj_offset_to_sorted_index(id_offset);
+      const next_sorted_offset_index = sorted_offset_index + 1;
+      var next_offset;
+      if(next_sorted_offset_index === this.pack_obj_offset_sorted_list.length) {
+        next_offset = this.pack_obj_array_buffer.byteLength - this.HASH_SIZE; // the pack file ends with SHA-1 checksum of file contents
+      } else {
+        next_offset = this.pack_obj_offset_sorted_list[next_sorted_offset_index][1];
+      }
+      var delta_zlib_data_size = next_offset - delta_data_offset;
+      this.inflate_pack_obj_data(delta_data_offset, delta_zlib_data_size, delta_data_size).then(function(delta_data_arr_buf) {
+        const delta_data_uint8 = new Uint8Array(delta_data_arr_buf);
+        //                      +------------+------------+----------------------------+
+        // delta_data_arr_buf = | source-len | target-len | {COPY,INSERT} instructions |
+        //                      +------------+------------+----------------------------+
+        var i = 0;
+        // source length
+        var byte_k = delta_data_uint8[i];
+        i += 1;
+        var source_size = byte_k & parseInt('0x7f', 16); // extract lower 7 bits
+        while (byte_k & parseInt('0x80', 16)) { // MSB = 1 indicates info overflow to next byte
+          byte_k = delta_data_uint8[i];
+          i += 1;
+          source_size |= (( byte_k & parseInt('0x7f', 16) ) << 7);
+        }
+        // target length
+        byte_k = delta_data_uint8[i];
+        i += 1;
+        var target_size = byte_k & parseInt('0x7f', 16); // extract lower 7 bits
+        while (byte_k & parseInt('0x80', 16)) { // MSB = 1 indicates info overflow to next byte
+          byte_k = delta_data_uint8[i];
+          i += 1;
+          target_size |= (( byte_k & parseInt('0x7f', 16) ) << 7);
+        }
+
+        var target_arr_buf = new ArrayBuffer(target_size);
+        var target_uint8 = new Uint8Array(target_arr_buf);
+        var target_offset = 0;
+
+        while( i < delta_data_uint8.length ) {
+          var cmd = delta_data_uint8[i];
+          if(cmd & 0b10000000) {
+            // COPY instruction, see
+            // https://github.com/git/git/blob/011b648646fcf1f467336ac6bbf46145501c0f12/Documentation/technical/pack-format.txt#L82
+            // https://github.com/git/git/blob/a9ecda2788e229afc9b611acaa26d0d9d4da53ed/patch-delta.c
+            var cp_offset = 0;
+            var cp_size = 0;
+            if(cmd & 0b00000001) {
+              // offset1 present
+              i = i + 1;
+              cp_offset = delta_data_uint8[i];
+            }
+            if(cmd & 0b00000010) {
+              // offset2 present
+              i = i + 1;
+              cp_offset |= delta_data_uint8[i] << 8;
+            }
+            if(cmd & 0b00000100) {
+              // offset3 present
+              i = i + 1;
+              cp_offset |= delta_data_uint8[i] << 16;
+            }
+            if(cmd & 0b00001000) {
+              // offset4 present
+              i = i + 1;
+              cp_offset |= delta_data_uint8[i] << 24;
+            }
+            if(cmd & 0b00010000) {
+              // size1 present
+              i = i + 1;
+              cp_size |= delta_data_uint8[i];
+            }
+            if(cmd & 0b00100000) {
+              // size2 present
+              i = i + 1;
+              cp_size |= delta_data_uint8[i] << 8;
+            }
+            if(cmd & 0b01000000) {
+              // size3 present
+              i = i + 1;
+              cp_size |= delta_data_uint8[i] << 16;
+            }
+            if (cp_size == 0) {
+              cp_size = 0x10000;
+            }
+            for(var base_index=0; base_index < cp_size; ++base_index) {
+              target_uint8[target_offset] = base_data_uint8[cp_offset + base_index];
+              target_offset += 1;
+            }
+            i = i + 1; // move to next command
+          } else {
+            // INSERT instruction
+            var insert_size = cmd;
+            if(insert_size === 0) {
+              err_callback('Malformed delta object: INSERT size cannot be 0');
+            }
+            i = i + 1; // move to the start of next delta data
+            for(var insert_index=0; insert_index < insert_size; insert_index++) {
+              target_uint8[target_offset] = delta_data_uint8[i + insert_index];
+              target_offset += 1;
+            }
+            i += insert_size;
+          }
+        }
+        ok_callback(target_arr_buf);
+      }.bind(this), function(err_delta) {
+        err_callback(err_delta);
+      });
+    }.bind(this), function(err_base) {
+      err_callback(err_base);
+    });
+  }.bind(this));
+}
+
+_git.prototype.pack_object_type_id_to_name = function(object_type_id) {
+  for(object_type_str in this.PACK_OBJECT_TYPE) {
+    if(this.PACK_OBJECT_TYPE[object_type_str] === object_type_id) {
+      return object_type_str;
+    }
+  }
+  return 'UNKNOWN-ID (' + object_type_id + ')';
+}
+
+_git.prototype.parse_commit_obj = function(commit_obj_text) {
+  var commit_obj = {};
+  const empty_line_idx0 = commit_obj_text.indexOf('\n\n', 0);
+  const empty_line_idx1 = commit_obj_text.indexOf('\n', empty_line_idx0 + 2);
+  const commit_metadata = commit_obj_text.substring(0, empty_line_idx0);
+  const commit_log = commit_obj_text.substring(empty_line_idx0 + 2, empty_line_idx1);
+  const commit_extra = commit_obj_text.substring(empty_line_idx1 + 1);
+
+  commit_obj['log'] = commit_log;
+  commit_obj['extra'] = commit_extra;
+  const commit_metadata_tok = commit_metadata.split('\n');
+  for(var i=0; i<commit_metadata_tok.length; ++i) {
+    const line = commit_metadata_tok[i];
+    const line_tok = line.split(' ');
+    const key = line_tok[0];
+    const value = line_tok[1];
+    switch(key) {
+    case 'tagger':
+    case 'author':
+    case 'committer':
+      const space1_idx = line.indexOf(' ', 0);
+      const email_idx0 = line.indexOf('<', space1_idx);
+      const email_idx1 = line.indexOf('>', email_idx0);
+      const timestamp_idx = line.indexOf(' ', email_idx1);
+      const timezone_idx = line.indexOf(' ', timestamp_idx + 1);
+      const name = line.substring(space1_idx + 1, email_idx0 - 1);
+      const email = line.substring(email_idx0 + 1, email_idx1);
+      const git_timestamp = line.substring(timestamp_idx + 1, timezone_idx);
+      const git_timezone = line.substring(timezone_idx + 1, line.length);
+      var timezone_iso = git_timezone.substring(0, 3) + ':' + git_timezone.substring(3);
+      // convert the git timestamp and timezone into Javascript Date() object
+      const git_date = new Date(parseInt(git_timestamp) * 1000);
+      var git_date_iso_str = git_date.toISOString();
+      var date_iso_str = git_date_iso_str.replace('Z', timezone_iso);
+      var date = new Date(Date.parse(date_iso_str))
+      commit_obj[key] = {
+        'name': name,
+        'email': email,
+        'date': date,
+        'git_timestamp': git_timestamp,
+        'git_timezone': git_timezone,
+      }
+      break;
+    default:
+      commit_obj[key] = value;
+    }
+  }
+
+  return commit_obj;
+}
+
+// https://github.com/isomorphic-git/isomorphic-git/blob/90ea0e34f6bb0956858213281fafff0fd8e94309/src/models/GitTree.js#L27
+_git.prototype.mode_to_type = function(mode) {
+  switch (mode) {
+  case '040000':
+  case '40000':
+    return 'tree';
+  case '100644':
+    return 'blob';
+  case '100755':
+    return 'blob';
+  case '120000':
+    return 'blob';
+  case '160000':
+    return 'commit';
+  }
+}
+
+// https://github.com/git/git/blob/2e8e77cbac8ac17f94eee2087187fa1718e38b14/builtin/ls-tree.c#L342
+// https://github.com/isomorphic-git/isomorphic-git/blob/90ea0e34f6bb0956858213281fafff0fd8e94309/src/models/GitTree.js#L27
+// [mode] [file/folder name]\0[SHA-1 of referencing blob or tree]
+//
+// Note: This took me nearly two weekends to understand;
+// finally, the code isomorphic-git code helped me understand it.
+_git.prototype.parse_tree_obj = function(buf) {
+  var buf_uint8 = new Uint8Array(buf);
+  var offset = 0;
+  var tree_content = [];
+  const decoder = new TextDecoder('utf-8');
+
+  while(offset < buf_uint8.length) {
+    const space_idx = buf_uint8.indexOf(32, offset);
+    if(space_idx === -1) {
+      console.error('failed to find space character after offset ' + offset);
+      return;
+    }
+    const null_idx = buf_uint8.indexOf(0, offset);
+    if(null_idx === -1) {
+      console.error('failed to find null character after offset ' + offset);
+      return;
+    }
+
+    const mode = decoder.decode(buf.slice(offset, space_idx));
+    const type = this.mode_to_type(mode);
+    const filename = decoder.decode(buf_uint8.slice(space_idx + 1, null_idx));
+    const oid = this.to_hex(buf_uint8.slice(null_idx + 1, null_idx + 21));
+    offset = null_idx + 21;
+    tree_content.push({mode, filename, oid, type});
+  }
+  return tree_content;
+}
+
+// utils
+_git.prototype.to_hex = function(uint8_array) {
+  const hex = new Array(uint8_array.length);
+  for(var i=0; i<uint8_array.length; ++i) {
+    hex[i] = this.byte_to_hex[ uint8_array[i] ];
+  }
+  return hex.join('');
+}
+
 
 _git.prototype.pack_obj_id_to_index = function(id) {
   var low = 0;
@@ -405,9 +785,24 @@ _git.prototype.pack_obj_offset_to_index = function(pack_offset) {
   var high = this.pack_obj_id_list.length;
   while(low < high) {
     const mid = low + parseInt((high - low) / 2.0);
-    if(pack_offset < this.pack_obj_offset_sorted_list[mid]) {
+    if(pack_offset < this.pack_obj_offset_sorted_list[mid][1]) {
       high = mid;
-    } else if (pack_offset > this.pack_obj_offset_sorted_list[mid]) {
+    } else if (pack_offset > this.pack_obj_offset_sorted_list[mid][1]) {
+      low = mid + 1;
+    } else {
+      return this.pack_obj_offset_sorted_list[mid][0];
+    }
+  }
+}
+
+_git.prototype.pack_obj_offset_to_sorted_index = function(pack_offset) {
+  var low = 0;
+  var high = this.pack_obj_id_list.length;
+  while(low < high) {
+    const mid = low + parseInt((high - low) / 2.0);
+    if(pack_offset < this.pack_obj_offset_sorted_list[mid][1]) {
+      high = mid;
+    } else if (pack_offset > this.pack_obj_offset_sorted_list[mid][1]) {
       low = mid + 1;
     } else {
       return mid;
@@ -415,57 +810,52 @@ _git.prototype.pack_obj_offset_to_index = function(pack_offset) {
   }
 }
 
-_git.prototype.unpack_non_delta_entry = function(id, pack_offset, type, object_size) {
-  return new Promise(function(ok_callback, err_callback) {
-    const object_type_name = this.pack_object_type_id_to_str(type);
-    const offset = pack_offset + this.OBJECT_HEADER_SIZE;
-    const zlib_byte1 = this.pack_obj_uint8_arr[offset];
-    if(zlib_byte1 !== parseInt('0x78', 16)) {
-      console.error('malformed header of zlib compressed object: expected 0x78, got ' + zlib_byte1.toString(16));
-      err_callback(zlib_byte1);
-      return;
-    }
+_git.prototype.load_object_metadata = function(id, pack_offset) {
+  // The first byte is structured as follows:
+  // MSB : is set to indicate that object size value overflows into the next byte
+  // 3 bits  : object type
+  // 4 bites : size (partial size if MSB is set to 1)
+  var offset = pack_offset;
+  const byte1 = this.pack_obj_uint8_arr[offset];
+  offset += 1;
 
-    // The pack files only contains the size of uncompressed data and
-    // does not contain the size of compressed zlib data. So, we do
-    // not know how many bytes to provide to the DecompressionStream().
-    // If any extra bytes are supplied to the browser's zlib decompression
-    // algorithm, the following error gets raised
-    //     "Unexpected input after the end of stream"
-    // To solve this, we create a sorted list of all offset values obtained
-    // from the pack index file and compute the size of zlib data based on
-    // the difference between consecutive offset values.
-    const id_index = this.pack_obj_id_to_index(id);
-    const id_offset = this.pack_obj_offset_list[id_index];
-    const sorted_offset_index = this.pack_obj_offset_to_index(id_offset);
-    const next_sorted_offset_index = sorted_offset_index + 1;
-    const next_offset = this.pack_obj_offset_sorted_list[next_sorted_offset_index];
+  var type = (byte1 >> 4) & 7; // extract the 3 bits holding type information
+  var object_size = (byte1 & 15);
+  var shift = 4;
+  var byte_k = byte1;
+  while (byte_k & parseInt('0x80', 16)) {
+    byte_k = this.pack_obj_uint8_arr[offset];
+    offset += 1;
+    object_size += ( (byte_k & parseInt('0x7f', 16)) << shift );
+    shift += 7;
+  }
 
-    const zlib_data_size = (next_offset - pack_offset) - this.OBJECT_HEADER_SIZE;
-    var obj_arr_uint8 = new Uint8Array(this.pack_obj_array_buffer.slice(offset, offset + zlib_data_size));
-    const pack_blob = new Blob([ obj_arr_uint8 ])
-    const ds = new DecompressionStream("deflate");
-    const decompressedStream = pack_blob.stream().pipeThrough(ds);
-    const response = new Response(decompressedStream).blob();
-    response.then( function(object_blob) {
-      if(object_blob.size !== object_size) {
-        const err_msg = 'Inflated object size mismatch: expected=' + object_size + ', received=' + object_blob.size;
-        err_callback(err_msg);
-      } else {
-        object_blob.text().then(function(object_text) {
-          ok_callback(object_text);
-        }, function(err_text) {
-          err_callback(err_text);
-        });
-      }
-    }.bind(this), function(err) {
-      err_callback(err);
-    });
-  }.bind(this));
+  const id_index = this.pack_obj_id_to_index(id);
+  const id_offset = this.pack_obj_offset_list[id_index];
+  const sorted_offset_index = this.pack_obj_offset_to_sorted_index(id_offset);
+  const next_sorted_offset_index = sorted_offset_index + 1;
+  var next_offset = 0;
+  if(next_sorted_offset_index === this.pack_obj_offset_sorted_list.length) {
+    next_offset = this.pack_obj_array_buffer.byteLength;
+  } else {
+    next_offset = this.pack_obj_offset_sorted_list[next_sorted_offset_index][1];
+  }
+
+  const zlib_data_size = (next_offset - pack_offset) - this.OBJECT_HEADER_SIZE;
+
+  return {
+    'object_type_id':type,
+    'object_type_name':this.pack_object_type_id_to_name(type),
+    'object_size':object_size,
+    'object_zlib_data_size':zlib_data_size
+  }
 }
 
-_git.prototype.unpack_delta_entry = function(id, pack_offset, type, delta_size) {
-  return new Promise(function(ok_callback, err_callback) {
-    console.log('TODO');
-  }.bind(this));
+//
+// debug tools
+//
+_git.prototype.print_tree_obj = function(tree_contents) {
+  for(var i=0; i<tree_contents.length; ++i) {
+    console.log(tree_contents[i].mode + ' ' + tree_contents[i].type + ' ' + tree_contents[i].oid + '\t' + tree_contents[i].filename);
+  }
 }
