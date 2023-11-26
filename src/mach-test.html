@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="author" content="Abhishek Dutta">
+    <meta name="description" content="A software tool to manually annotate and analyse the evolution of software program code contained in a code repository.">
+    <!-- turn off caching for debugging -->
+    <meta http-equiv="cache-control" content="no-cache" />
+    <meta http-equiv="expires" content="0" />
+    <meta http-equiv="pragma" content="no-cache" />
+    <title>Test for Manual Annotation of Code History (MACH)</title>
+  </head>
+  <style>
+    body { background-color:white; }
+    .fail { color:red; }
+    .pass { color:green; }
+    #mach_test_container { white-space:pre; unicode-bidi:embed; font-family: monospace; }
+  </style>
+  <body>
+    <h2>Test for Manual Annotation of Code History (MACH)</h2>
+    <div id="mach_test_container"></div>
+  </body>
+
+  <script src="diff_match_patch.js"></script>
+  <script src="mach-test.js"></script>
+  <script src="git.js"></script>
+  <script src="mach.js"></script>
+
+  <script>
+    if(!window.DecompressionStream) {
+      // TODO: use zlib library (Javascript version) to inflate the data
+      var msg = 'Upgrade your browser to the latest version (e.g. Firefox 113, Chrome 80) because the DecompressionStream API not available this browser which is required to inflate zlib compressed objects stored in git pack files.';
+      window.alert(msg);
+      throw new Error(msg);
+    }
+
+    if(typeof(mach_test_data) === 'undefined') {
+      var msg = 'test data not found, ensure that mach-test.js file is included';
+      window.alert(msg);
+      throw new Error(msg);
+    }
+
+    const mach = new _mach();
+    const mach_test_container = document.getElementById('mach_test_container');
+    mach.init(mach_test_container);
+
+    const REPO_BASEURL      = '../repo/';
+    const REPO_NAME         = 'coreutils.git';
+    this.selected_tag_name = 'refs/tags/v8.3';
+    const repo_url = REPO_BASEURL + REPO_NAME;
+    mach.load_code_repo(repo_url).then(function(repo_stat) {
+      var init_results = []
+      const tag_count = repo_stat.tag_count;
+      init_results.push( assert(tag_count, mach_test_data[REPO_NAME]['repo']['tag_count'], 'Count of tags in the repository') );
+
+      const obj_count = repo_stat.pack_obj_count;
+      init_results.push( assert(tag_count, mach_test_data[REPO_NAME]['repo']['tag_count'], 'Count of objects in the repository') );
+      log_test_result( { 'test_id':'0', 'results':init_results } );
+
+      const TEST_COUNT = mach_test_data[REPO_NAME]['test'].length;
+      var test_result_promise_list = [];
+      for(var test_index=0; test_index<TEST_COUNT; ++test_index) {
+        const test_id = (test_index+1) + '/' + TEST_COUNT;
+        const test_target = mach_test_data[REPO_NAME]['test'][test_index]['target'];
+        if(test_target === 'load_object') {
+          const object_id = mach_test_data[REPO_NAME]['test'][test_index]['param']['id'];
+          const object_type = mach_test_data[REPO_NAME]['test'][test_index]['param']['expected_object_type'];
+          const expected_value = mach_test_data[REPO_NAME]['test'][test_index]['param']['expected_object_value'];
+          const expected_size = mach_test_data[REPO_NAME]['test'][test_index]['param']['expected_object_size'];
+          const test_result_promise = test_load_object(test_id, object_id, object_type, expected_value, expected_size);
+          test_result_promise_list.push(test_result_promise);
+        }
+      }
+      Promise.all(test_result_promise_list).then( function(all_test_result_data) {
+        if(all_test_result_data.length === TEST_COUNT) {
+          for(var i=0; i<TEST_COUNT; ++i) {
+            log_test_result(all_test_result_data[i]);
+          }
+          log('All ' + TEST_COUNT + ' tests passed successfully');
+        } else {
+          log('Only ' + all_test_result_data.length + ' tests passed, <span class="fail">' + (TEST_COUNT-all_test_result_data.length) + ' tests failed</span>.');
+        }
+      }.bind(this), function(err) {
+        log_error('Failed to execute some of the tests');
+        log_error(err);
+      }.bind(this));
+    }.bind(this), function(err) {
+      log_error('Failed to load repository ' + repo_url);
+      log_error(err);
+    });
+
+    function test_load_object(test_id, object_id, object_type, expected_value, expected_size) {
+      return new Promise(function(ok_callback, err_callback) {
+        const index = mach.git.pack_obj_id_to_index(object_id);
+        const offset = mach.git.pack_obj_offset_list[index];
+        mach.git.load_object(object_id, offset).then(function(object_buf) {
+          var decoded_value = object_buf;
+          var results = [];
+          if(object_buf instanceof ArrayBuffer) {
+            results.push( assert(object_buf.byteLength, expected_size, 'object-size') );
+            if(object_type === 'tree') {
+              decoded_value = mach.git.parse_tree_obj(object_buf, 'plain-text');
+            } else {
+              const decoder = new TextDecoder();
+              decoded_value = decoder.decode(object_buf);
+            }
+          } else {
+            results.push( assert(object_buf.length, expected_size, 'object-size') );
+          }
+          results.push( assert(decoded_value, expected_value, 'object-value') );
+          ok_callback( {'test_id': test_id, 'results':results} );
+        }.bind(this), function(err_obj) {
+          err_callback(err_obj)
+        });
+      }.bind(this))
+    }
+
+    function assert(actual_value, expected_value, value_name) {
+      var result = {
+        'actual': actual_value,
+        'expected': expected_value,
+        'name': value_name,
+        'success': 0,
+        'message': ''
+      }
+
+      if(typeof(actual_value) === 'string' && typeof(expected_value) === 'string') {
+        result['success'] = (actual_value === expected_value);
+        var dmp = new diff_match_patch();
+        var diff = dmp.diff_main(actual_value, expected_value);
+        result['message'] = dmp.diff_prettyHtml(diff)
+      } else if(typeof(actual_value) === 'number' && typeof(expected_value) === 'number') {
+        result['success'] = (actual_value === expected_value);
+        result['message'] = 'actual=' + actual_value + ', expected=' + expected_value;
+      } else if(typeof(actual_value) === 'object' && typeof(expected_value) === 'object') {
+        const actual_str = JSON.stringify(actual_value);
+        const expected_str = JSON.stringify(expected_value)
+        result['success'] = (actual_str === expected_str);
+        var dmp = new diff_match_patch();
+        var diff = dmp.diff_main(actual_str, expected_str);
+        result['message'] = dmp.diff_prettyHtml(diff)
+      } else {
+        result['message'] = 'cannot compare values of type ' + typeof(actual_value) + ' and ' + typeof(expected_value)
+      }
+      return result;
+    }
+
+    function log(msg) {
+      const timestamp = new Date().toLocaleString();
+      document.getElementById('mach_test_container').innerHTML += '[' + timestamp + '] ' + msg + '<br>';
+    }
+
+    function log_error(msg) {
+      const timestamp = new Date().toLocaleString();
+      document.getElementById('mach_test_container').innerHTML += '[' + timestamp + '] <span class="fail">' + msg + '</span><br>';
+    }
+
+    function log_test_result(test_result_data) {
+      var test_result = [];
+      var test_debug_stack = [];
+      test_result.push('TEST ' + test_result_data['test_id'] + ' : ');
+      for(var i=0; i<test_result_data['results'].length; ++i) {
+        if(test_result_data['results'][i]['success']) {
+          test_result.push( i + ' : <span class="pass">PASS</span>' );
+        } else {
+          test_result.push(i + ' : <span class="fail">FAIL</span>');
+          test_debug_stack.push( test_result_data['results'][i]['message'] );
+        }
+      }
+      log(test_result.join(', '));
+      if(test_debug_stack.length) {
+        log(test_debug_stack.join('<br>---------------------------------<br>'));
+      }
+    }
+  </script>
+</html>
