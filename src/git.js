@@ -371,6 +371,7 @@ _git.prototype.parse_pack_object = function(array_buffer) {
     this.pack_obj_size_list = new Array(this.pack_obj_count);
     this.pack_obj_type_list = new Array(this.pack_obj_count);
     this.pack_obj_data_offset_list = new Array(this.pack_obj_count);
+
     for(var i=0; i<this.pack_obj_count; ++i) {
       const id = this.pack_obj_id_list[i];
       const offset = this.pack_obj_offset_list[i];
@@ -995,11 +996,11 @@ _git.prototype.load_tree = function(id, path) {
         if(tree_entries[i]['type'] === this.PACK_OBJECT_TYPE.OBJ_TREE) {
           var new_path = path.slice(0, path.length);
           new_path.push(filename);
-          const subtree_id = tree_entries[filename]['id'];
+          const subtree_id = tree_entries[i]['id'];
           tree_node[filename] = {};
           tree_subnode_promises.push( this.load_tree(subtree_id, new_path) );
         } else {
-          tree_node[filename] = tree_node[filename]['id'];
+          tree_node[filename] = tree_entries[i]['id'];
         }
       }
       if(tree_subnode_promises.length) {
