@@ -16,13 +16,24 @@ function _git(repo_url) {
   this.pack_id = '';
   this.pack_obj_id_list = new Array(0);
   this.pack_obj_offset_list = new Array(0);
+  this.pack_obj_offset_sorted_list = new Array(0);
   this.pack_obj_crc_list = new Array(0);
-
+  this.pack_obj_size_list = new Array(0);
+  this.pack_obj_type_list = new Array(0);
+  this.pack_obj_data_offset_list = new Array(0);
+  this.pack_obj_count = 0;
   this.pack_obj_array_buffer = new ArrayBuffer(0);
   this.pack_obj_uint8_arr = new Uint8Array(0);
+  this.pack_obj_grouped_by_type = {};
+
+  this.commit = {};
+  this.commit_id_sorted_list = new Array(0);
+  this.tree = {};
 
   // defined in https://github.com/git/git/blob/master/object.h
   this.PACK_OBJECT_TYPE = {
+    OBJ_BAD: -1,
+    OBJ_NONE: 0,
     OBJ_COMMIT: 1,
     OBJ_TREE: 2,
     OBJ_BLOB: 3,
@@ -31,8 +42,8 @@ function _git(repo_url) {
     OBJ_REF_DELTA: 7
   }
   this.OBJECT_HEADER_SIZE = 2; // in bytes
-  this.HASH_SIZE = 20; // sha1 is 160 bits = 20 bytes
-
+  this.HASH_SIZE = 20;         // sha1 is 160 bits = 20 bytes
+  this.PACK_HEADER_SIZE = 12;  // [SIGNATURE, VERSION, OBJ-COUNT] each 4 bytes long
   this.byte_to_hex = new Array(256);
 
   // initialise the module
@@ -209,6 +220,7 @@ _git.prototype.parse_pack_index = function(array_buffer) {
     var crc = [];
     var off = [];
     var off64_nr = 0;
+    this.pack_obj_count = nr;
     this.pack_obj_id_list = new Array(nr);
     this.pack_obj_offset_list = new Array(nr);
     this.pack_obj_crc_list = new Array(nr);
@@ -349,11 +361,30 @@ _git.prototype.parse_pack_object = function(array_buffer) {
     }
 
     const pack_obj_count = this.ntohl(pack_obj_header[2]);
-    if(pack_obj_count !== this.pack_obj_id_list.length) {
+    if(pack_obj_count !== this.pack_obj_count) {
       err_callback('mismatch between pack object count in index file and object file!');
       return;
     }
     this.pack_obj_uint8_arr = new Uint8Array(this.pack_obj_array_buffer);
+
+    // load all object metadata
+    this.pack_obj_size_list = new Array(this.pack_obj_count);
+    this.pack_obj_type_list = new Array(this.pack_obj_count);
+    this.pack_obj_data_offset_list = new Array(this.pack_obj_count);
+    for(var i=0; i<this.pack_obj_count; ++i) {
+      const id = this.pack_obj_id_list[i];
+      const offset = this.pack_obj_offset_list[i];
+      const metadata = this.load_object_metadata(id, offset);
+      const type = metadata[0];
+      this.pack_obj_type_list[i] = type;
+      this.pack_obj_size_list[i] = metadata[1];
+      this.pack_obj_data_offset_list[i] = metadata[2];
+
+      if( !(type in this.pack_obj_grouped_by_type) ) {
+        this.pack_obj_grouped_by_type[type] = [];
+      }
+      this.pack_obj_grouped_by_type[type].push(id);
+    }
     ok_callback(array_buffer.byteLength);
   }.bind(this));
 }
@@ -370,38 +401,44 @@ _git.prototype.load_object = function(id, pack_offset) {
     const byte1 = this.pack_obj_uint8_arr[offset];
     offset += 1;
 
-    var type = (byte1 >> 4) & 7; // extract the 3 bits holding type information
-    var object_size = (byte1 & 15);
+    var type = (byte1 >> 4) & 0b00000111; // extract the 3 bits holding type information
+    var object_size = (byte1 & 0b00001111);
     var shift = 4;
     var byte_k = byte1;
-    while (byte_k & parseInt('0x80', 16)) {
+    while (byte_k & 0b10000000) {
       byte_k = this.pack_obj_uint8_arr[offset];
       offset += 1;
-      object_size += ( (byte_k & parseInt('0x7f', 16)) << shift );
+      object_size += ( (byte_k & 0b01111111) << shift );
       shift += 7;
     }
 
     switch(type) {
+    case this.PACK_OBJECT_TYPE.OBJ_BAD:
+      err_callback('Cannot load object of type OBJ_BAD');
+      break;
+    case this.PACK_OBJECT_TYPE.OBJ_NONE:
+      err_callback('Cannot load object of type OBJ_NONE');
+      break;
     case this.PACK_OBJECT_TYPE.OBJ_COMMIT:
     case this.PACK_OBJECT_TYPE.OBJ_TREE:
     case this.PACK_OBJECT_TYPE.OBJ_BLOB:
     case this.PACK_OBJECT_TYPE.OBJ_TAG:
-      this.unpack_non_delta_entry(id, offset, type, object_size).then(function(object_buf) {
-        ok_callback(object_buf);
+      this.unpack_non_delta_entry(id, offset, type, object_size).then(function(object) {
+        ok_callback(object);
       }, function(obj_err) {
         err_callback(obj_err);
       });
       break;
     case this.PACK_OBJECT_TYPE.OBJ_OFS_DELTA:
       const delta_data_size = object_size; // size of data after negative offset
-      this.unpack_offset_delta_entry(id, pack_offset, delta_data_size).then(function(object_text) {
-        ok_callback(object_text);
+      this.unpack_offset_delta_entry(id, offset, delta_data_size).then(function(object) {
+        ok_callback(object);
       }, function(obj_err) {
         err_callback(obj_err);
       });
       break;
     case this.PACK_OBJECT_TYPE.OBJ_REF_DELTA:
-      console.error('decoding of object type OBJ_REF_DELTA not supported!');
+      err_callback('decoding of object type OBJ_REF_DELTA not supported yet!');
       break;
     default:
       err_callback('unknown object type ' + type);
@@ -409,12 +446,12 @@ _git.prototype.load_object = function(id, pack_offset) {
   }.bind(this));
 }
 
-_git.prototype.unpack_non_delta_entry = function(id, zlib_data_offset, type, object_size, ) {
+_git.prototype.unpack_non_delta_entry = function(id, zlib_data_offset, type, object_size) {
   return new Promise(function(ok_callback, err_callback) {
     const offset = zlib_data_offset;
     const zlib_byte1 = this.pack_obj_uint8_arr[offset];
     if(zlib_byte1 !== parseInt('0x78', 16)) {
-      console.error('malformed header of zlib compressed object: expected 0x78, got ' + zlib_byte1.toString(16));
+      console.error('id=' + id + ', type=' + type + ' : malformed header of zlib compressed object: expected 0x78, got ' + zlib_byte1.toString(16));
       err_callback(zlib_byte1);
       return;
     }
@@ -488,14 +525,8 @@ _git.prototype.inflate_pack_obj_data = function(offset, size, deflate_size) {
   }.bind(this));
 }
 
-_git.prototype.unpack_offset_delta_entry = function(id, pack_offset, delta_data_size) {
+_git.prototype.unpack_offset_delta_entry = function(id, offset, delta_data_size) {
   return new Promise(function(ok_callback, err_callback) {
-    const delta_offset = pack_offset;
-    const delta_metadata = this.load_object_metadata(id, pack_offset);
-    const delta_size_in_packfile = delta_metadata['object_zlib_data_size'];
-
-    var offset = pack_offset + this.OBJECT_HEADER_SIZE;
-
     // 1. Find negative offset for base object
     // The delta object contains instructions (COPY, INSERT) to
     // create the final object data. The COPY instruction corresponds
@@ -503,12 +534,14 @@ _git.prototype.unpack_offset_delta_entry = function(id, pack_offset, delta_data_
     // corresponds to the data contained in the delta object
     var byte_k = this.pack_obj_uint8_arr[offset];
     offset += 1;
-    var negative_offset = byte_k & parseInt('0x7f', 16); // extract lower 7 bits
-    while (byte_k & parseInt('0x80', 16)) { // MSB = 1 indicates info overflow to next byte
+    var negative_offset = byte_k & 0b01111111; // extract lower 7 bits
+    var loop_count = 0;
+    while (byte_k & 0b10000000) { // MSB = 1 indicates info overflow to next byte
       negative_offset += 1;
       byte_k = this.pack_obj_uint8_arr[offset];
       offset += 1;
-      negative_offset = (negative_offset << 7) + ( byte_k & parseInt('0x7f', 16) );
+      negative_offset = (negative_offset << 7) + ( byte_k & 0b01111111);
+      loop_count += 1;
     }
     const delta_data_offset = offset;
     const id_index = this.pack_obj_id_to_index(id);
@@ -517,10 +550,6 @@ _git.prototype.unpack_offset_delta_entry = function(id, pack_offset, delta_data_
     // find the base_id based on base_offset using binary search
     const base_offset_index = this.pack_obj_offset_to_index(base_offset);
     const base_id = this.pack_obj_id_list[base_offset_index];
-    const base_metadata = this.load_object_metadata(base_id, base_offset);
-    const base_size = base_metadata['object_size'];
-    const base_type = base_metadata['object_type_id'];
-    const base_packfile_size = base_metadata['object_zlib_data_size'];
 
     // 2. parse delta data for COPY/INSERT instructions
     // should be COPY, INSERT
@@ -549,20 +578,20 @@ _git.prototype.unpack_offset_delta_entry = function(id, pack_offset, delta_data_
         // source length
         var byte_k = delta_data_uint8[i];
         i += 1;
-        var source_size = byte_k & parseInt('0x7f', 16); // extract lower 7 bits
-        while (byte_k & parseInt('0x80', 16)) { // MSB = 1 indicates info overflow to next byte
+        var source_size = byte_k & 0b01111111; // extract lower 7 bits
+        while (byte_k & 0b10000000) { // MSB = 1 indicates info overflow to next byte
           byte_k = delta_data_uint8[i];
           i += 1;
-          source_size |= (( byte_k & parseInt('0x7f', 16) ) << 7);
+          source_size |= (( byte_k & 0b01111111 ) << 7);
         }
         // target length
         byte_k = delta_data_uint8[i];
         i += 1;
-        var target_size = byte_k & parseInt('0x7f', 16); // extract lower 7 bits
-        while (byte_k & parseInt('0x80', 16)) { // MSB = 1 indicates info overflow to next byte
+        var target_size = byte_k & 0b01111111; // extract lower 7 bits
+        while (byte_k & 0b10000000) { // MSB = 1 indicates info overflow to next byte
           byte_k = delta_data_uint8[i];
           i += 1;
-          target_size |= (( byte_k & parseInt('0x7f', 16) ) << 7);
+          target_size |= (( byte_k & 0b01111111 ) << 7);
         }
 
         var target_arr_buf = new ArrayBuffer(target_size);
@@ -644,7 +673,7 @@ _git.prototype.unpack_offset_delta_entry = function(id, pack_offset, delta_data_
   }.bind(this));
 }
 
-_git.prototype.pack_object_type_id_to_name = function(object_type_id) {
+_git.prototype.obj_type_id_to_name = function(object_type_id) {
   for(object_type_str in this.PACK_OBJECT_TYPE) {
     if(this.PACK_OBJECT_TYPE[object_type_str] === object_type_id) {
       return object_type_str;
@@ -653,7 +682,9 @@ _git.prototype.pack_object_type_id_to_name = function(object_type_id) {
   return 'UNKNOWN-ID (' + object_type_id + ')';
 }
 
-_git.prototype.parse_commit_obj = function(commit_obj_text) {
+_git.prototype.parse_commit_obj = function(commit_obj) {
+  const decoder = new TextDecoder('utf-8');
+  const commit_obj_text = decoder.decode(commit_obj);
   var commit_obj = {};
   const empty_line_idx0 = commit_obj_text.indexOf('\n\n', 0);
   const empty_line_idx1 = commit_obj_text.indexOf('\n', empty_line_idx0 + 2);
@@ -709,11 +740,25 @@ _git.prototype.mode_to_type = function(mode) {
   switch (mode) {
   case '040000':
   case '40000':
+    return this.PACK_OBJECT_TYPE.OBJ_TREE;
+  case '100644':
+    return this.PACK_OBJECT_TYPE.OBJ_BLOB;
+  case '100755':
+    return this.PACK_OBJECT_TYPE.OBJ_BLOB;
+  case '120000':
+    return this.PACK_OBJECT_TYPE.OBJ_BLOB;
+  case '160000':
+    return this.PACK_OBJECT_TYPE.OBJ_COMMIT;
+  }
+}
+
+_git.prototype.mode_to_type_name = function(mode) {
+  switch (mode) {
+  case '040000':
+  case '40000':
     return 'tree';
   case '100644':
-    return 'blob';
   case '100755':
-    return 'blob';
   case '120000':
     return 'blob';
   case '160000':
@@ -727,10 +772,11 @@ _git.prototype.mode_to_type = function(mode) {
 //
 // Note: This took me nearly two weekends to understand;
 // finally, the code isomorphic-git code helped me understand it.
-_git.prototype.parse_tree_obj = function(buf) {
+// requested_return_type = { 'array-of-dict', 'plain-text' }
+_git.prototype.parse_tree_obj = function(buf, requested_return_type) {
+  var result = [];
   var buf_uint8 = new Uint8Array(buf);
   var offset = 0;
-  var tree_content = [];
   const decoder = new TextDecoder('utf-8');
 
   while(offset < buf_uint8.length) {
@@ -745,14 +791,25 @@ _git.prototype.parse_tree_obj = function(buf) {
       return;
     }
 
-    const mode = decoder.decode(buf.slice(offset, space_idx));
-    const type = this.mode_to_type(mode);
+    var mode = decoder.decode(buf.slice(offset, space_idx));
+    if(mode === '40000') {
+      mode = '040000';
+    }
+    const type = this.mode_to_type_name(mode);
     const filename = decoder.decode(buf_uint8.slice(space_idx + 1, null_idx));
     const oid = this.to_hex(buf_uint8.slice(null_idx + 1, null_idx + 21));
     offset = null_idx + 21;
-    tree_content.push({mode, filename, oid, type});
+    if(requested_return_type === 'array-of-dict') {
+      result.push( { 'filename':filename, 'mode':mode, 'type':type, 'id':oid } );
+    } else {
+      result.push(mode + ' ' + type + ' ' + oid + '\t' + filename);
+    }
   }
-  return tree_content;
+  if(requested_return_type === 'plain-text') {
+    return result.join('\n');
+  } else {
+    return result;
+  }
 }
 
 // utils
@@ -819,36 +876,145 @@ _git.prototype.load_object_metadata = function(id, pack_offset) {
   const byte1 = this.pack_obj_uint8_arr[offset];
   offset += 1;
 
-  var type = (byte1 >> 4) & 7; // extract the 3 bits holding type information
-  var object_size = (byte1 & 15);
+  var type = (byte1 >> 4) & 0b00000111; // extract the 3 bits holding type information
+  var object_size = (byte1 & 0b00001111);
   var shift = 4;
   var byte_k = byte1;
-  while (byte_k & parseInt('0x80', 16)) {
+  while (byte_k & 0b10000000) {
     byte_k = this.pack_obj_uint8_arr[offset];
     offset += 1;
-    object_size += ( (byte_k & parseInt('0x7f', 16)) << shift );
+    object_size += ( (byte_k & 0b01111111) << shift );
     shift += 7;
   }
 
-  const id_index = this.pack_obj_id_to_index(id);
-  const id_offset = this.pack_obj_offset_list[id_index];
-  const sorted_offset_index = this.pack_obj_offset_to_sorted_index(id_offset);
-  const next_sorted_offset_index = sorted_offset_index + 1;
-  var next_offset = 0;
-  if(next_sorted_offset_index === this.pack_obj_offset_sorted_list.length) {
-    next_offset = this.pack_obj_array_buffer.byteLength;
-  } else {
-    next_offset = this.pack_obj_offset_sorted_list[next_sorted_offset_index][1];
-  }
+  return [type, object_size, offset];
+}
 
-  const zlib_data_size = (next_offset - pack_offset) - this.OBJECT_HEADER_SIZE;
+// Load all commit and their corresponding tree in cache
+_git.prototype.load_all_commit = function() {
+  return new Promise(function(ok_callback, err_callback) {
+    const OBJ_COMMIT = this.PACK_OBJECT_TYPE.OBJ_COMMIT;
+    const COMMIT_COUNT = this.pack_obj_grouped_by_type[OBJ_COMMIT].length;
+    console.log('Loading ' + COMMIT_COUNT + ' commits ...');
+    var commit_load_promise_list = new Array(COMMIT_COUNT);
+    const start_time = performance.now();
 
-  return {
-    'object_type_id':type,
-    'object_type_name':this.pack_object_type_id_to_name(type),
-    'object_size':object_size,
-    'object_zlib_data_size':zlib_data_size
-  }
+    for(var commit_index=0; commit_index<COMMIT_COUNT; ++commit_index) {
+      const commit_id = this.pack_obj_grouped_by_type[OBJ_COMMIT][commit_index];
+      const index = this.pack_obj_id_to_index(commit_id);
+      const commit_offset = this.pack_obj_offset_list[index];
+      const commit_size = this.pack_obj_size_list[index];
+      const data_offset = this.pack_obj_data_offset_list[index];
+      const type = this.pack_obj_type_list[index];
+
+      // The pack files only contains the size of uncompressed data and
+      // does not contain the size of compressed zlib data. So, we do
+      // not know how many bytes to provide to the DecompressionStream().
+      // If any extra bytes are supplied to the browser's zlib decompression
+      // algorithm, the following error gets raised
+      //     "Unexpected input after the end of stream"
+      // To solve this, we create a sorted list of all offset values obtained
+      // from the pack index file and compute the size of zlib data based on
+      // the difference between consecutive offset values.
+      const sorted_offset_index = this.pack_obj_offset_to_sorted_index(commit_offset);
+      const next_sorted_offset_index = sorted_offset_index + 1;
+      const next_offset = this.pack_obj_offset_sorted_list[next_sorted_offset_index][1];
+
+      const data_byte1 = this.pack_obj_uint8_arr[data_offset];
+      if(data_byte1 & 0b01111000) { // 0x78 is marker for zlib compressed stream
+        const zlib_data_size = (next_offset - data_offset);
+        const zlib_data_blob = new Blob([ this.pack_obj_array_buffer.slice(data_offset, data_offset + zlib_data_size) ])
+
+        // TODO: add all zlib data into a single blob and try to decompress eveything in one go
+        const ds = new DecompressionStream("deflate");
+        const decompressedStream = zlib_data_blob.stream().pipeThrough(ds);
+        commit_load_promise_list[commit_index] = new Response(decompressedStream).arrayBuffer();
+      } else {
+        console.log('WARNING: id=' + commit_id + ', type=' + type + ' : expected first byte 0x78, got ' + data_byte1.toString(16));
+      }
+    }
+
+    // wait until all zlib compressed commit objects get decompressed
+    // TODO: This currently takes a long time (e.g. 18 sec.), optimize it
+    // for example by using the Streams API to inflate all objects in one go
+    Promise.all(commit_load_promise_list).then( function(commit_data_list) {
+      const end_time = performance.now();
+      const elapsed = end_time - start_time;
+      const COMMIT_DATA_COUNT = commit_data_list.length;
+      if(COMMIT_DATA_COUNT !== COMMIT_COUNT) {
+        console.log('WARNING: Only ' + COMMIT_DATA_COUNT + ' out of ' + COMMIT_COUNT + ' commits were loaded');
+        err_callback(COMMIT_DATA_COUNT);
+        return;
+      } else {
+        console.log('loaded ' + commit_data_list.length + ' commits in ' + elapsed + ' ms');
+      }
+      this.commit_id_sorted_list = new Array(COMMIT_COUNT);
+      for(var commit_index=0; commit_index<COMMIT_COUNT; ++commit_index) {
+        const id = this.pack_obj_grouped_by_type[OBJ_COMMIT][commit_index];
+        this.commit[id] = this.parse_commit_obj(commit_data_list[commit_index]);
+        this.commit_id_sorted_list[commit_index] = [ id, parseInt(this.commit[id]['author']['git_timestamp']) ];
+      }
+      this.commit_id_sorted_list.sort( function(a, b) {
+        if(a[1] < b[1]) {
+          return -1;
+        } else if(a[1] > b[1]) {
+          return 1;
+        }
+        return 0;
+      });
+      ok_callback(COMMIT_COUNT);
+    }.bind(this), function(err) {
+      err_callback(err);
+    });
+  }.bind(this));
+}
+
+// Load all commit and their corresponding tree in cache
+_git.prototype.load_tree = function(id, path) {
+  return new Promise(function(ok_callback, err_callback) {
+    const index = this.pack_obj_id_to_index(id);
+    const offset = this.pack_obj_offset_list[index];
+    var tree_node = this.tree;
+    for(var i=0; i<path.length; ++i) {
+      if( !tree_node.hasOwnProperty(path[i]) ) {
+        tree_node[ path[i] ] = {};
+      }
+      tree_node = tree_node[ path[i] ]
+    }
+    this.load_object(id, offset).then(function(tree_obj) {
+      const tree_entries = this.parse_tree_obj(tree_obj, 'array-of-dict');
+      for(var i=0; i<tree_entries.length; ++i) {
+        const filename = tree_entries[i];
+        tree_node[filename] = tree_entries[i];
+      }
+
+      // find a tree node and resolve it
+      var tree_subnode_promises = [];
+      for(var i=0; i<tree_entries.length; ++i) {
+        const filename = tree_entries[i];
+        if(tree_entries[i]['type'] === this.PACK_OBJECT_TYPE.OBJ_TREE) {
+          var new_path = path.slice(0, path.length);
+          new_path.push(filename);
+          const subtree_id = tree_entries[filename]['id'];
+          tree_node[filename] = {};
+          tree_subnode_promises.push( this.load_tree(subtree_id, new_path) );
+        } else {
+          tree_node[filename] = tree_node[filename]['id'];
+        }
+      }
+      if(tree_subnode_promises.length) {
+        Promise.all(tree_subnode_promises).then(function(path_list) {
+          ok_callback(path);
+        }.bind(this), function(err_node) {
+          err_callback(err_node);
+        });
+      } else {
+        ok_callback(path);
+      }
+    }.bind(this), function(err_obj) {
+      err_callback(err_obj);
+    });
+  }.bind(this));
 }
 
 //
