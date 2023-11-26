@@ -985,15 +985,15 @@ _git.prototype.load_tree = function(id, path) {
     this.load_object(id, offset).then(function(tree_obj) {
       const tree_entries = this.parse_tree_obj(tree_obj, 'array-of-dict');
       for(var i=0; i<tree_entries.length; ++i) {
-        const filename = tree_entries[i];
+        const filename = tree_entries[i]['filename'];
         tree_node[filename] = tree_entries[i];
       }
 
       // find a tree node and resolve it
       var tree_subnode_promises = [];
       for(var i=0; i<tree_entries.length; ++i) {
-        const filename = tree_entries[i];
-        if(tree_entries[i]['type'] === this.PACK_OBJECT_TYPE.OBJ_TREE) {
+        const filename = tree_entries[i]['filename'];
+        if(tree_entries[i]['type'] === 'tree') {
           var new_path = path.slice(0, path.length);
           new_path.push(filename);
           const subtree_id = tree_entries[i]['id'];

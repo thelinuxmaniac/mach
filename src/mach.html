@@ -4,14 +4,19 @@
     <meta charset="UTF-8">
     <meta name="author" content="Abhishek Dutta">
     <meta name="description" content="A software tool to manually annotate and analyse the evolution of software program code contained in a code repository.">
-    <title>Analysis of Code Evolution (ACE)</title>
+    <!-- turn off caching for debugging -->
+    <meta http-equiv="cache-control" content="no-cache" />
+    <meta http-equiv="expires" content="0" />
+    <meta http-equiv="pragma" content="no-cache" />
+    <title>Manual Annotation of Code History (MACH)</title>
+    <link rel="stylesheet" href="mach.css" />
   </head>
   <body>
-    <h1>Analysis of Code Evolution (ACE)</h1>
-    <select id="tag_list"></select>
+    <div id="mach_container"></div>
   </body>
 
   <script src="git.js"></script>
+  <script src="mach.js"></script>
 
   <script>
     if(!window.DecompressionStream) {
@@ -21,46 +26,36 @@
       throw new Error(error_msg);
     }
 
-    const REPO_BASEURL = '../repo/';
-    const REPO_NAME = 'coreutils.git';
-    const SELECTED_TAG_NAME = 'refs/tags/v8.3';
+    const mach = new _mach();
+    const mach_container = document.getElementById('mach_container');
+    mach.init(mach_container);
 
+    // for debugging
+    const REPO_BASEURL      = '../repo/';
+    const REPO_NAME         = 'coreutils.git';
+    this.selected_tag_name = 'refs/tags/v8.3';
     const repo_url = REPO_BASEURL + REPO_NAME;
+    mach.load_code_repo(repo_url).then(function(repo_stat) {
+      const tag_count = repo_stat.tag_count;
+      const obj_count = repo_stat.pack_obj_count;
+      console.log('loaded repo with ' + tag_count + ' tags and ' + obj_count + ' objects');
 
-    const git = new _git(repo_url);
-    git.load_tag_ref().then(function(ok_tag) {
-      const selected_tag_id = git.tag_ref[SELECTED_TAG_NAME]['tag_id'];
-      const selected_tag_commit_id = git.tag_ref[SELECTED_TAG_NAME]['commit_id'];
-      this.load_all_pack_index().then(function(ok_pack) {
-        if(ok_pack.length == 0 || typeof(ok_pack[0]) == 'undefined') {
-          console.error('failed to load pack index');
-          return;
-        }
-        console.log('loaded git pack index');
-        console.log(SELECTED_TAG_NAME + ': tag-id=' + selected_tag_id
-                    + ', tag-offset=' + this.pack_index[selected_tag_id]['offset']
-                    + ', tag-crc=' + this.pack_index[selected_tag_id]['crc']
-                   );
-        this.load_all_pack_object().then(function(stat) {
-          const pack_byte_length = stat.pack_byte_length;
-          const pack_obj_count = stat.pack_obj_count;
-          console.log('loaded git pack of size ' + pack_byte_length + ' bytes containing ' + pack_obj_count + ' objects.');
-          const selected_tag_id = git.tag_ref[SELECTED_TAG_NAME]['tag_id'];
-          const tag_offset = this.pack_index[selected_tag_id]['offset'];
-          this.load_object(selected_tag_id, tag_offset).then(function(object_text) {
-            console.log('showing object content for ' + SELECTED_TAG_NAME);
-            console.log(object_text)
-          }, function(err_load_obj) {
-            console.error(err_load_obj);
-          });
-        }.bind(this), function(err_pack_obj) {
-          console.error(err_pack_obj);
+      mach.git.load_all_commit().then( function(loaded_commit_count) {
+        const COMMIT_COUNT = loaded_commit_count;
+        const last_commit_id = mach.git.commit_id_sorted_list[COMMIT_COUNT-1][0];
+        console.log('last commit id ' + last_commit_id + ', index=' + mach.git.commit_id_sorted_list[COMMIT_COUNT-1][1]);
+        const tree_id = mach.git.commit[last_commit_id]['tree'];
+        mach.git.load_tree(tree_id, []).then(function(merged_paths) {
+          mach.ui_init();
+          mach.update_source_tree();
+        }.bind(this), function(err_tree) {
+          mach.log('Error: failed to load tree contents (' + err_tree + ')');
         });
-      }.bind(this), function(err_pack) {
-        console.error(err_pack);
+      }.bind(this), function(err_commit) {
+        mach.log('Error: failed to load commits (' + err_commit + ')');
       });
-    }.bind(git), function(err_tag) {
-      console.error(err);
-    });
+    }.bind(this), function(err_repo) {
+      mach.log('Error: ' + err_repo);
+    }.bind(this));
   </script>
 </html>
