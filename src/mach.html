@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8">
-    <meta name="author" content="Abhishek Dutta">
+    <meta name="author" content="Abhishek Dutta (https://abhishekdutta.org)">
     <meta name="description" content="A software tool to manually annotate and analyse the evolution of software program code contained in a code repository.">
     <!-- turn off caching for debugging -->
     <meta http-equiv="cache-control" content="no-cache" />
@@ -10,11 +10,13 @@
     <meta http-equiv="pragma" content="no-cache" />
     <title>Manual Annotation of Code History (MACH)</title>
     <link rel="stylesheet" href="mach.css" />
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
   </head>
   <body>
     <div id="mach_container"></div>
   </body>
 
+  <script src="external/diff-match-patch/diff_match_patch_uncompressed.js"></script>
   <script src="git.js"></script>
   <script src="mach.js"></script>
 
@@ -33,27 +35,34 @@
     // for debugging
     const REPO_BASEURL      = '../repo/';
     const REPO_NAME         = 'coreutils.git';
-    this.selected_tag_name = 'refs/tags/v8.3';
+
+    // for Debugging only
+    // src/wc.c was last updated on
+    // Wed, 30 Aug 2023 14:39:34 +0000 (07:39 -0700)
+    // see http://git.savannah.gnu.org/gitweb/?p=coreutils.git;a=commit;h=e0326b0473837aae21fbf4c60674a5fcf85d9bf1
+    const SELECTED_COMMIT_ID = 'e0326b0473837aae21fbf4c60674a5fcf85d9bf1';
+
     const repo_url = REPO_BASEURL + REPO_NAME;
+    mach.ui_init();
     mach.load_code_repo(repo_url).then(function(repo_stat) {
       const tag_count = repo_stat.tag_count;
       const obj_count = repo_stat.pack_obj_count;
       console.log('loaded repo with ' + tag_count + ' tags and ' + obj_count + ' objects');
 
-      mach.git.load_all_commit().then( function(loaded_commit_count) {
-        const COMMIT_COUNT = loaded_commit_count;
-        const last_commit_id = mach.git.commit_id_sorted_list[COMMIT_COUNT-1][0];
-        console.log('last commit id ' + last_commit_id + ', index=' + mach.git.commit_id_sorted_list[COMMIT_COUNT-1][1]);
-        const tree_id = mach.git.commit[last_commit_id]['tree'];
-        mach.git.load_tree(tree_id, []).then(function(merged_paths) {
-          mach.ui_init();
+      mach.now.commit_id = SELECTED_COMMIT_ID;
+      mach.git.load_object(mach.now.commit_id).then(function(commit_obj) {
+        console.log('loaded commit ' + mach.now.commit_id)
+        mach.now.commit = mach.git.parse_commit_obj(commit_obj);
+        const tree_id = mach.now.commit['tree'];
+        mach.git.load_tree(tree_id, [], {}).then(function(tree) {
+          mach.now.tree = tree;
           mach.update_source_tree();
         }.bind(this), function(err_tree) {
           mach.log('Error: failed to load tree contents (' + err_tree + ')');
-        });
+        }.bind(this));
       }.bind(this), function(err_commit) {
         mach.log('Error: failed to load commits (' + err_commit + ')');
-      });
+      }.bind(this));
     }.bind(this), function(err_repo) {
       mach.log('Error: ' + err_repo);
     }.bind(this));

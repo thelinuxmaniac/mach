@@ -10,7 +10,7 @@ body { background-color: #808080; }
     background-color: #808080;
     display:grid;
     grid-template-columns: 15vw 1fr;
-    grid-template-rows: 10vh 50vh 1fr;
+    grid-template-rows: 4em 65vh 1fr;
     height:98vh;
 }
 
@@ -49,12 +49,16 @@ body { background-color: #808080; }
 #mach_container .tree_container ul li:not(:first-child):last-child::before {display: none;}
 
 #mach_container .nav_container {
-    background-color: #56B4E9;
     grid-column-start:2;
     grid-column-end:3;
     grid-row-start:1;
     grid-row-end:2;
+    height:100%;
 }
+
+#mach_container .nav_container > .nav { padding:0.4em 0em; text-align:center; }
+#mach_container .nav_container > .nav button { margin:0 0.5em; }
+#mach_container .nav_container > .nav select { width:20em; }
 
 #mach_container .content_container {
     grid-column-start:2;
@@ -65,7 +69,12 @@ body { background-color: #808080; }
 }
 
 #mach_container .content_container .content_info { display:block; font-size:1em; color: #f2f2f2; background-color:#333333; border-bottom:1px solid #000000; padding:0.2em 0.5em; }
-#mach_container .content_container .content { box-sizing: border-box; display:block; background-color:#333333; color:#f2f2f2; white-space:pre; unicode-bidi:embed; font-family: monospace; border:none; font-size:1em; width:100%; height:100%; padding:1em; }
+
+/*
+#mach_container .content_container .content { box-sizing: border-box; display:block; background-color:#333333; color:#f2f2f2; white-space:pre; unicode-bidi:embed; font-family: monospace; border:none; font-size:1em; width:100%; max-height:90%; padding:1em; }*/
+#mach_container .content_container .content { box-sizing: border-box; display:inline-block; background-color:#333333; color:#f2f2f2; white-space:pre; unicode-bidi:embed; font-family: monospace; border:none; font-size:1em; width:100%; height:90%; overflow:scroll; padding:1em; }
+#mach_container .content_container .content ins { background-color: #d4fcbc; color:black; }
+#mach_container .content_container .content del { background-color: #D55E00; color:black; }
 
 #mach_container .annotation_container {
     background-color: #CC79A7;
