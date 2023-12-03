@@ -566,19 +566,23 @@ _git.prototype.unpack_offset_delta_entry = function(id, offset, delta_data_size)
         var byte_k = delta_data_uint8[i];
         i += 1;
         var source_size = byte_k & 0b01111111; // extract lower 7 bits
+        var shift = 7;
         while (byte_k & 0b10000000) { // MSB = 1 indicates info overflow to next byte
           byte_k = delta_data_uint8[i];
           i += 1;
-          source_size |= (( byte_k & 0b01111111 ) << 7);
+          source_size |= (( byte_k & 0b01111111 ) << shift);
+          shift += 7;
         }
         // target length
         byte_k = delta_data_uint8[i];
         i += 1;
         var target_size = byte_k & 0b01111111; // extract lower 7 bits
+        shift = 7;
         while (byte_k & 0b10000000) { // MSB = 1 indicates info overflow to next byte
           byte_k = delta_data_uint8[i];
           i += 1;
-          target_size |= (( byte_k & 0b01111111 ) << 7);
+          target_size |= (( byte_k & 0b01111111 ) << shift);
+          shift += 7;
         }
 
         var target_arr_buf = new ArrayBuffer(target_size);
