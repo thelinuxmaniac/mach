@@ -392,27 +392,13 @@ _git.prototype.parse_pack_object = function(array_buffer) {
 
 // References
 // - https://github.com/git/git/blob/bcb6cae2966cc407ca1afc77413b3ef11103c175/builtin/unpack-objects.c::unpack_one()
-_git.prototype.load_object = function(id, pack_offset) {
+_git.prototype.load_object = function(id) {
   return new Promise(function(ok_callback, err_callback) {
-    // The first byte is structured as follows:
-    // MSB : is set to indicate that object size value overflows into the next byte
-    // 3 bits  : object type
-    // 4 bites : size (partial size if MSB is set to 1)
-    var offset = pack_offset;
-    const byte1 = this.pack_obj_uint8_arr[offset];
-    offset += 1;
-
-    var type = (byte1 >> 4) & 0b00000111; // extract the 3 bits holding type information
-    var object_size = (byte1 & 0b00001111);
-    var shift = 4;
-    var byte_k = byte1;
-    while (byte_k & 0b10000000) {
-      byte_k = this.pack_obj_uint8_arr[offset];
-      offset += 1;
-      object_size += ( (byte_k & 0b01111111) << shift );
-      shift += 7;
-    }
-
+    const index = this.pack_obj_id_to_index(id);
+    const offset = this.pack_obj_offset_list[index];
+    const object_size = this.pack_obj_size_list[index];
+    const data_offset = this.pack_obj_data_offset_list[index];
+    const type = this.pack_obj_type_list[index];
     switch(type) {
     case this.PACK_OBJECT_TYPE.OBJ_BAD:
       err_callback('Cannot load object of type OBJ_BAD');
@@ -424,7 +410,7 @@ _git.prototype.load_object = function(id, pack_offset) {
     case this.PACK_OBJECT_TYPE.OBJ_TREE:
     case this.PACK_OBJECT_TYPE.OBJ_BLOB:
     case this.PACK_OBJECT_TYPE.OBJ_TAG:
-      this.unpack_non_delta_entry(id, offset, type, object_size).then(function(object) {
+      this.unpack_non_delta_entry(id, data_offset, type, object_size).then(function(object) {
         ok_callback(object);
       }, function(obj_err) {
         err_callback(obj_err);
@@ -432,7 +418,7 @@ _git.prototype.load_object = function(id, pack_offset) {
       break;
     case this.PACK_OBJECT_TYPE.OBJ_OFS_DELTA:
       const delta_data_size = object_size; // size of data after negative offset
-      this.unpack_offset_delta_entry(id, offset, delta_data_size).then(function(object) {
+      this.unpack_offset_delta_entry(id, data_offset, delta_data_size).then(function(object) {
         ok_callback(object);
       }, function(obj_err) {
         err_callback(obj_err);
@@ -555,7 +541,7 @@ _git.prototype.unpack_offset_delta_entry = function(id, offset, delta_data_size)
     // 2. parse delta data for COPY/INSERT instructions
     // should be COPY, INSERT
     // see https://github.com/git/git/blob/011b648646fcf1f467336ac6bbf46145501c0f12/Documentation/technical/pack-format.txt#L39
-    this.load_object(base_id, base_offset).then(function(base_data_arr_buf) {
+    this.load_object(base_id).then(function(base_data_arr_buf) {
       const base_data_uint8 = new Uint8Array(base_data_arr_buf);
 
       const decoder = new TextDecoder();
@@ -973,8 +959,6 @@ _git.prototype.load_all_commit = function() {
 // Load all commit and their corresponding tree in cache
 _git.prototype.load_tree = function(id, path) {
   return new Promise(function(ok_callback, err_callback) {
-    const index = this.pack_obj_id_to_index(id);
-    const offset = this.pack_obj_offset_list[index];
     var tree_node = this.tree;
     for(var i=0; i<path.length; ++i) {
       if( !tree_node.hasOwnProperty(path[i]) ) {
@@ -982,7 +966,7 @@ _git.prototype.load_tree = function(id, path) {
       }
       tree_node = tree_node[ path[i] ]
     }
-    this.load_object(id, offset).then(function(tree_obj) {
+    this.load_object(id).then(function(tree_obj) {
       const tree_entries = this.parse_tree_obj(tree_obj, 'array-of-dict');
       for(var i=0; i<tree_entries.length; ++i) {
         const filename = tree_entries[i]['filename'];
