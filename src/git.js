@@ -27,7 +27,6 @@ function _git(repo_url) {
   this.pack_obj_grouped_by_type = {};
 
   this.commit = {};
-  this.commit_id_sorted_list = new Array(0);
   this.tree = {};
 
   // defined in https://github.com/git/git/blob/master/object.h
@@ -939,20 +938,10 @@ _git.prototype.load_all_commit = function() {
       } else {
         console.log('loaded ' + commit_data_list.length + ' commits in ' + elapsed + ' ms');
       }
-      this.commit_id_sorted_list = new Array(COMMIT_COUNT);
       for(var commit_index=0; commit_index<COMMIT_COUNT; ++commit_index) {
         const id = this.pack_obj_grouped_by_type[OBJ_COMMIT][commit_index];
         this.commit[id] = this.parse_commit_obj(commit_data_list[commit_index]);
-        this.commit_id_sorted_list[commit_index] = [ id, parseInt(this.commit[id]['author']['git_timestamp']) ];
       }
-      this.commit_id_sorted_list.sort( function(a, b) {
-        if(a[1] < b[1]) {
-          return -1;
-        } else if(a[1] > b[1]) {
-          return 1;
-        }
-        return 0;
-      });
       ok_callback(COMMIT_COUNT);
     }.bind(this), function(err) {
       err_callback(err);
