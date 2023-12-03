@@ -706,14 +706,12 @@ _git.prototype.parse_commit_obj = function(commit_obj) {
       var timezone_iso = git_timezone.substring(0, 3) + ':' + git_timezone.substring(3);
       // convert the git timestamp and timezone into Javascript Date() object
       const git_date = new Date(parseInt(git_timestamp) * 1000);
-      var git_date_iso_str = git_date.toISOString();
-      var date_iso_str = git_date_iso_str.replace('Z', timezone_iso);
-      var date = new Date(Date.parse(date_iso_str))
+      var date = new Date(Date.parse(git_date))
       commit_obj[key] = {
         'name': name,
         'email': email,
         'date': date,
-        'git_timestamp': git_timestamp,
+        'git_timestamp': Number(git_timestamp),
         'git_timezone': git_timezone,
       }
       break;
