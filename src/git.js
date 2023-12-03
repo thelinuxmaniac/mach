@@ -948,9 +948,9 @@ _git.prototype.load_all_commit = function() {
 }
 
 // Load all commit and their corresponding tree in cache
-_git.prototype.load_tree = function(id, path) {
+_git.prototype.load_tree = function(id, path, tree) {
   return new Promise(function(ok_callback, err_callback) {
-    var tree_node = this.tree;
+    var tree_node = tree;
     for(var i=0; i<path.length; ++i) {
       if( !tree_node.hasOwnProperty(path[i]) ) {
         tree_node[ path[i] ] = {};
@@ -973,19 +973,19 @@ _git.prototype.load_tree = function(id, path) {
           new_path.push(filename);
           const subtree_id = tree_entries[i]['id'];
           tree_node[filename] = {};
-          tree_subnode_promises.push( this.load_tree(subtree_id, new_path) );
+          tree_subnode_promises.push( this.load_tree(subtree_id, new_path, tree) );
         } else {
           tree_node[filename] = tree_entries[i]['id'];
         }
       }
       if(tree_subnode_promises.length) {
         Promise.all(tree_subnode_promises).then(function(path_list) {
-          ok_callback(path);
+          ok_callback(tree);
         }.bind(this), function(err_node) {
           err_callback(err_node);
         });
       } else {
-        ok_callback(path);
+        ok_callback(tree);
       }
     }.bind(this), function(err_obj) {
       err_callback(err_obj);
