@@ -13,6 +13,7 @@ function _mach() {
 
   // UI state
   this.now = {
+    'file_path':'', // current file
     'commit': {},   // current commit
     'tree': {},     // source tree corresponding to current commit
     'object': {},   // object (e.g. file) selected by user from the current tree
@@ -112,6 +113,9 @@ _mach.prototype.ui_init = function() {
   this.c.appendChild(content_container);
   this.c.appendChild(annotation_container);
   this.c.appendChild(this.log_container);
+
+  // initialize keyboard shortcut handler
+  window.addEventListener('keydown', this.keydown_handler.bind(this))
 }
 
 _mach.prototype.update_source_tree = function() {
@@ -215,7 +219,10 @@ _mach.prototype.show_file = function(file_path, version) {
         var dmp = new diff_match_patch();
         var diff = dmp.diff_main(current_version, prev_version);
         dmp.diff_cleanupSemantic(diff);
-        this.content.innerHTML = this.diff_to_html(diff);
+        const diff_html = this.diff_to_html(diff);
+        this.content.innerHTML = diff_html['html'];
+        this.now.object[this.now.file_path]['history'][version]['diff'] = diff_html['diff'];
+        this.now['current_diff_index'] = -1;
         var add_count = 0;
         var del_count = 0;
         for(var i=0; i<diff.length; ++i) {
@@ -226,7 +233,7 @@ _mach.prototype.show_file = function(file_path, version) {
           }
         }
         this.content_info.innerHTML = file_path + ' | ' + add_count + '+ ' + del_count + '- | ' + current_version_log;
-        this.log('loaded file ' + name + ' (version ' + version + ')');
+        this.log('loaded file ' + name + ' (version ' + version + '). Press <span class="key">&uarr;</span> or <span class="key">&darr;</span> to view changes made in this revision.');
       }.bind(this), function(err_prev) {
         this.log('Error loading previous version: ' + err_prev);
       }.bind(this));
@@ -394,26 +401,26 @@ _mach.prototype.show_latest_version = function(e) {
   this.show_file(this.now.file_path, latest_version);
 }
 
-_mach.prototype.show_next_version = function(e) {
-  const history_count = this.now.object[this.now.file_path]['history'].length;
-  const version = this.file_revision_list.selectedIndex;
-  next_version = version + 1;
-  if(next_version >= history_count) {
-    next_version = 0;
-  }
-  this.file_revision_list.selectedIndex = next_version;
-  this.show_file(this.now.file_path, next_version);
-}
-
 _mach.prototype.show_prev_version = function(e) {
   const history_count = this.now.object[this.now.file_path]['history'].length;
   const version = this.file_revision_list.selectedIndex;
-  prev_version = version - 1;
-  if(prev_version < 0) {
-    prev_version = history_count - 1;
+  prev_version = version + 1;
+  if(prev_version >= history_count) {
+    prev_version = 0;
   }
   this.file_revision_list.selectedIndex = prev_version;
   this.show_file(this.now.file_path, prev_version);
+}
+
+_mach.prototype.show_next_version = function(e) {
+  const history_count = this.now.object[this.now.file_path]['history'].length;
+  const version = this.file_revision_list.selectedIndex;
+  next_version = version - 1;
+  if(next_version < 0) {
+    next_version = history_count - 1;
+  }
+  this.file_revision_list.selectedIndex = next_version;
+  this.show_file(this.now.file_path, next_version);
 }
 
 _mach.prototype.show_file_version = function() {
@@ -429,25 +436,109 @@ _mach.prototype.diff_to_html = function(diffs) {
   var pattern_gt = />/g;
   var pattern_para = /\n/g;
   const diff_length = diffs.length;
+  var diff = [];
   for (var x = 0; x < diff_length; x++) {
     var op = diffs[x][0];    // Operation (insert, delete, equal)
     var data = diffs[x][1];  // Text of change.
     var text = data.replace(pattern_amp, '&amp;').replace(pattern_lt, '&lt;')
         .replace(pattern_gt, '&gt;');
+    const diff_id = 'diff_' + x;
     switch (op) {
-      case 1:  // insert
-        html[x] = '<ins>' + text + '</ins>';
-        break;
-      case -1: // delete
-        html[x] = '<del>' + text + '</del>';
-        break;
-      case 0:  // equal
-        html[x] = '<span>' + text + '</span>';
-        break;
+    case 1:  // insert
+      html[x] = '<ins id="' + diff_id + '">' + text + '</ins>';
+      diff.push(diff_id)
+      break;
+    case -1: // delete
+      html[x] = '<del id="' + diff_id + '">' + text + '</del>';
+      diff.push(diff_id)
+
+      break;
+    case 0:  // equal
+      html[x] = '<span>' + text + '</span>';
+      break;
     }
   }
-  return html.join('');
+
+  return {
+    'html': html.join(''),
+    'diff': diff
+  }
 };
+
+_mach.prototype.show_next_change = function() {
+  const version = this.file_revision_list.selectedIndex;
+  const diff_count = this.now.object[this.now.file_path]['history'][version]['diff'].length;
+  var next_diff_index = this.now['current_diff_index'] + 1;
+  if(next_diff_index >= diff_count) {
+    next_diff_index = 0;
+  }
+  const diff_el_id = this.now.object[this.now.file_path]['history'][version]['diff'][next_diff_index];
+  const diff_el = document.getElementById(diff_el_id);
+  diff_el.scrollIntoView({ behavior: "smooth", block: "center", inline: "start" });
+  this.now['current_diff_index'] = next_diff_index;
+  this.log('Showing diff ' + (this.now['current_diff_index'] + 1) + ' of ' + diff_count);
+}
+
+_mach.prototype.show_prev_change = function() {
+  const version = this.file_revision_list.selectedIndex;
+  const diff_count = this.now.object[this.now.file_path]['history'][version]['diff'].length;
+  var prev_diff_index = this.now['current_diff_index'] - 1;
+  if(prev_diff_index < 0) {
+    prev_diff_index = diff_count - 1;
+  }
+  const diff_el_id = this.now.object[this.now.file_path]['history'][version]['diff'][prev_diff_index];
+  const diff_el = document.getElementById(diff_el_id);
+  diff_el.scrollIntoView({ behavior: "smooth", block: "center", inline: "start" });
+  this.now['current_diff_index'] = prev_diff_index;
+  this.log('Showing diff ' + (this.now['current_diff_index'] + 1) + ' of ' + diff_count);
+}
+
+//
+// keyboard shortcut handler
+//
+_mach.prototype.keydown_handler = function(e) {
+  if(e.target !== document.body) {
+    return;
+  }
+
+  if(e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+    if(this.now.file_path === '') {
+      this.log('Select a file first');
+      return;
+    }
+    if(e.key === 'ArrowRight') {
+      this.show_next_version();
+    } else {
+      this.show_prev_version();
+    }
+    e.preventDefault();
+    return;
+  }
+
+  if(e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    if(this.now.file_path === '') {
+      this.log('Select a file first');
+      return;
+    }
+    if(e.shiftKey) {
+      if(e.key === 'ArrowUp') {
+        this.content.scrollBy(0, -10);
+      } else {
+        this.content.scrollBy(0, 10);
+      }
+      e.preventDefault();
+      return;
+    } else {
+      if(e.key === 'ArrowUp') {
+        this.show_prev_change();
+      } else {
+        this.show_next_change();
+      }
+      e.preventDefault();
+      return;
+    }
+  }
+}
 
 //
 // log notifications for the user
