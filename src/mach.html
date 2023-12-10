@@ -17,7 +17,8 @@
   </body>
 
   <script src="external/diff-match-patch/diff_match_patch_uncompressed.js"></script>
-  <script src="git.js"></script>
+  <script src="git.js?v=5"></script>
+  <script src="mach-debug-projects.js"></script>
   <script src="mach.js"></script>
 
   <script>
@@ -33,17 +34,14 @@
     mach.init(mach_container);
 
     // for debugging
-    const REPO_BASEURL      = '../repo/';
-    const REPO_NAME         = 'coreutils.git';
+    if(typeof(mach_debug_projects) === 'object') {
+      const mach_project = mach_debug_projects[0]
+      mach.log('loading project ' + mach_project['mach']['project']['name']);
+      mach.load_project(mach_project);
+    }
 
-    // for Debugging only
-    // src/wc.c was last updated on
-    // Wed, 30 Aug 2023 14:39:34 +0000 (07:39 -0700)
-    // see http://git.savannah.gnu.org/gitweb/?p=coreutils.git;a=commit;h=e0326b0473837aae21fbf4c60674a5fcf85d9bf1
-    const SELECTED_COMMIT_ID = 'e0326b0473837aae21fbf4c60674a5fcf85d9bf1';
+    /*
 
-    const repo_url = REPO_BASEURL + REPO_NAME;
-    mach.ui_init();
     mach.load_code_repo(repo_url).then(function(repo_stat) {
       const tag_count = repo_stat.tag_count;
       const obj_count = repo_stat.pack_obj_count;
@@ -66,5 +64,6 @@
     }.bind(this), function(err_repo) {
       mach.log('Error: ' + err_repo);
     }.bind(this));
+    */
   </script>
 </html>
