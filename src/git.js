@@ -45,6 +45,9 @@ function _git(repo_url) {
   this.PACK_HEADER_SIZE = 12;  // [SIGNATURE, VERSION, OBJ-COUNT] each 4 bytes long
   this.byte_to_hex = new Array(256);
 
+  // cache
+  this.cache = {};
+
   // initialise the module
   this._init();
 }
@@ -393,6 +396,11 @@ _git.prototype.parse_pack_object = function(array_buffer) {
 // - https://github.com/git/git/blob/bcb6cae2966cc407ca1afc77413b3ef11103c175/builtin/unpack-objects.c::unpack_one()
 _git.prototype.load_object = function(id) {
   return new Promise(function(ok_callback, err_callback) {
+    if(id in this.cache) {
+      ok_callback(this.cache[id]);
+      return;
+    }
+
     const index = this.pack_obj_id_to_index(id);
     const offset = this.pack_obj_offset_list[index];
     const object_size = this.pack_obj_size_list[index];
@@ -410,16 +418,22 @@ _git.prototype.load_object = function(id) {
     case this.PACK_OBJECT_TYPE.OBJ_BLOB:
     case this.PACK_OBJECT_TYPE.OBJ_TAG:
       this.unpack_non_delta_entry(id, data_offset, type, object_size).then(function(object) {
-        ok_callback(object);
-      }, function(obj_err) {
+        if(!this.cache.hasOwnProperty(id)) {
+          this.cache[id] = object;
+        }
+        ok_callback(this.cache[id]);
+      }.bind(this), function(obj_err) {
         err_callback(obj_err);
       });
       break;
     case this.PACK_OBJECT_TYPE.OBJ_OFS_DELTA:
       const delta_data_size = object_size; // size of data after negative offset
       this.unpack_offset_delta_entry(id, data_offset, delta_data_size).then(function(object) {
-        ok_callback(object);
-      }, function(obj_err) {
+        if(!this.cache.hasOwnProperty(id)) {
+          this.cache[id] = object;
+        }
+        ok_callback(this.cache[id]);
+      }.bind(this), function(obj_err) {
         err_callback(obj_err);
       });
       break;
