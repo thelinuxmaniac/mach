@@ -11,6 +11,10 @@ function _mach() {
   // this.repo_url : git repository URL
   // this.git      : interface to the git repository
 
+  this.MACH_NAME = 'Manual Annotation of Code History';
+  this.MACH_SHORT_NAME = 'MACH';
+  this.MACH_VERSION = '0.0.1';
+
   // Data
   this.d = {
     'mach': {
@@ -53,6 +57,12 @@ function _mach() {
     },
     'stat': {       // to store performance related statistical data
       'history': {}
+    },
+    'metadata': {
+      'shortcut_prefix_list': {},
+      'shortcut_ongoing': false,
+      'ongoing_shortcut_aid': '',
+      'shortcut_pressed_so_far': [],
     }
   }
 
@@ -60,10 +70,27 @@ function _mach() {
   this.log_clear_timer = 0;  // for clearing log messages automatically after timeout
   this.HISTORY_LOAD_MSG_FREQ = 3;
   this.MAX_FILE_HISTORY = 10;
+
+  // keyboard shortcuts
+  this.KEYBOARD_SHORTCUTS = [
+    [ ['Ctrl', 's'], 'Save project as JSON file' ],
+    [ ['Ctrl', 'o'], 'Load existing project from a JSON file' ],
+    [ ['&rarr;'], 'Show next version of current file' ],
+    [ ['&larr;'], 'Show previous version of current file' ],
+    [ ['&uarr;'], 'Scroll up by one line for the current file' ],
+    [ ['&darr;'], 'Scroll down by one line for the current file' ],
+    [ ['Alt', '&uarr;'], 'Jump to previous change in current file' ],
+    [ ['Alt', '&darr;'], 'Jump to next change in current file' ],
+  ];
 }
 
 _mach.prototype.init = function(html_container) {
   this.c = html_container;
+  this.init_ui();
+  this.nav.innerHTML = 'Use <span class="key">Ctrl</span> + <span class="key">o</span> to load a project, press <span class="key">F1</span> for help.';
+
+  // initialize keyboard shortcut handler
+  window.addEventListener('keydown', this.keydown_handler.bind(this))
 }
 
 //
@@ -99,7 +126,7 @@ _mach.prototype.load_code_repo = function(url) {
 //
 // HTML based user Interface
 //
-_mach.prototype.ui_init = function() {
+_mach.prototype.init_ui = function() {
   this.c.innerHTML = '';
 
   // source tree
@@ -111,7 +138,6 @@ _mach.prototype.ui_init = function() {
   nav_container.setAttribute('class', 'nav_container');
   this.nav = document.createElement('div');
   this.nav.setAttribute('class', 'nav');
-  this.nav.innerHTML = 'Click on a filename in the source tree shown on the left';
   nav_container.appendChild(this.nav);
 
   // content
@@ -119,7 +145,6 @@ _mach.prototype.ui_init = function() {
   content_container.setAttribute('class', 'content_container');
   this.content_info = document.createElement('div');
   this.content_info.setAttribute('class', 'content_info');
-  this.content_info.innerHTML = '&nbsp;';
   this.content = document.createElement('div');
   this.content.setAttribute('class', 'content');
 
@@ -127,9 +152,8 @@ _mach.prototype.ui_init = function() {
   content_container.appendChild(this.content);
 
   // annotation
-  const annotation_container = document.createElement('div');
-  annotation_container.setAttribute('class', 'annotation_container');
-  annotation_container.innerHTML = 'Manual annotations';
+  this.metadata_container = document.createElement('div');
+  this.metadata_container.setAttribute('class', 'metadata_container');
 
   // log showing notifications for the user
   this.log_container = document.createElement('div');
@@ -138,14 +162,29 @@ _mach.prototype.ui_init = function() {
   this.log_content.setAttribute('id', 'log_content');
   this.log_container.appendChild(this.log_content);
 
+  // for showing help
+  this.info_dialog = document.createElement('dialog');
+  this.info_dialog.setAttribute('class', 'info_dialog');
+  const dialog_toolbar = document.createElement('div');
+  const close_button = document.createElement('button');
+  close_button.innerHTML = '&times;';
+  close_button.addEventListener('click', function(e) {
+    this.info_dialog.close();
+  }.bind(this));
+  dialog_toolbar.setAttribute('class', 'toolbar');
+  dialog_toolbar.appendChild(close_button);
+
+  this.info_dialog_content = document.createElement('div');
+  this.info_dialog_content.setAttribute('class', 'info_dialog_content');
+  this.info_dialog.appendChild(dialog_toolbar);
+  this.info_dialog.appendChild(this.info_dialog_content);
+
   this.c.appendChild(this.tree_container);
   this.c.appendChild(nav_container);
   this.c.appendChild(content_container);
-  this.c.appendChild(annotation_container);
+  this.c.appendChild(this.metadata_container);
   this.c.appendChild(this.log_container);
-
-  // initialize keyboard shortcut handler
-  window.addEventListener('keydown', this.keydown_handler.bind(this))
+  this.c.appendChild(this.info_dialog);
 }
 
 _mach.prototype.show_source_tree = function(tree) {
@@ -236,6 +275,7 @@ _mach.prototype.show_file = function(filepath, version) {
       this.content.innerHTML = current_version;
       this.content_info.innerHTML = info.join('<span class="sep"> | </span>');
       this.log('loaded initial version of file ' + name);
+      this.init_all_attribute_io_panels();
       return;
     } else {
       const prev_version = version + 1;
@@ -260,7 +300,8 @@ _mach.prototype.show_file = function(filepath, version) {
         }
         info.push(add_count + '+ ' + del_count + '-');
         this.content_info.innerHTML = info.join('<span class="sep"> | </span>');
-        this.log('loaded file ' + name + ' (version ' + version + '). Press <span class="key">&uarr;</span> or <span class="key">&darr;</span> to view changes made in this revision.');
+        this.log('loaded file ' + name + ' (version ' + version + '). Press <span class="key">Alt</span> + <span class="key">&uarr;</span> or <span class="key">&darr;</span> to show changes made in this revision.');
+        this.init_all_attribute_io_panels();
       }.bind(this), function(err_prev) {
         this.log('Error loading previous version: ' + err_prev);
       }.bind(this));
@@ -550,9 +591,32 @@ _mach.prototype.keydown_handler = function(e) {
     return;
   }
 
+  if(e.key === 'F1') {
+    this.show_help();
+    e.preventDefault();
+    return;
+  }
+
+  if(e.key === 'Escape') {
+    if(this.now.metadata.shortcut_ongoing) {
+      this.now.metadata.shortcut_ongoing = false;
+      this.now.metadata.shortcut_pressed_so_far = [];
+      this.log('Deactivated attribute keyboard shortcut');
+      return;
+    }
+  }
+
   if(e.ctrlKey) {
     if(e.key === 's') {
       this.save_project();
+      e.preventDefault();
+    }
+    if(e.key === 'o') {
+      const file_selector = document.createElement('input');
+      file_selector.setAttribute('type', 'file');
+      file_selector.accept = '.json';
+      file_selector.onchange = this.load_project_from_file.bind(this);
+      file_selector.click();
       e.preventDefault();
     }
     return;
@@ -577,7 +641,7 @@ _mach.prototype.keydown_handler = function(e) {
       this.log('Select a file first');
       return;
     }
-    if(e.shiftKey) {
+    if(e.altKey) {
       if(e.key === 'ArrowUp') {
         this.show_prev_change();
       } else {
@@ -595,6 +659,32 @@ _mach.prototype.keydown_handler = function(e) {
       return;
     }
   }
+
+  if(e.key in this.now.metadata.shortcut_prefix_list) {
+    if(e.ctrlKey || e.shiftKey || e.altKey) {
+      return;
+    }
+    this.now.metadata.shortcut_ongoing = true;
+    this.now.metadata.ongoing_shortcut_aid = this.now.metadata.shortcut_prefix_list[e.key];
+    this.now.metadata.shortcut_pressed_so_far = [];
+    this.log('Shortcut activated for attribute [' + this.now.metadata.ongoing_shortcut_aid + '] using <span class="key">' + e.key + '</span>');
+  }
+  if( (e.key in ['1', '2', '3', '4', '5', '6', '7', '8', '9']) &&
+      this.now.metadata.shortcut_ongoing) {
+    this.now.metadata.shortcut_pressed_so_far.push(e.key);
+    const keypress_sofar = this.now.metadata.shortcut_pressed_so_far.join('.');
+
+    if(!this.is_ongoing_shortcut_valid()) {
+      this.log('Discarding invalid shortcut ' + keypress_sofar, true);
+      return;
+    }
+
+    if(this.is_ongoing_shortcut_complete()) {
+      this.on_attribute_shortcut_complete();
+    } else {
+      this.log('Waiting for completion of shortcut <span class="key">' + keypress_sofar + '</span>', true);
+    }
+  }
 }
 
 //
@@ -610,13 +700,23 @@ _mach.prototype.save_project = function() {
   this.save_data_to_local_file(blob, filename);
 }
 
-_mach.prototype.load_project = function(json) {
-  this.d = json;
+_mach.prototype.load_project_from_file = function(e) {
+  const selected_file = e.target.files[0];
+  this.load_text_file(selected_file, this.load_project.bind(this))
+}
+
+_mach.prototype.load_project = function(file_contents) {
+  this.d = {};
+  if(typeof(file_contents) === 'string') {
+    this.d = JSON.parse(file_contents);
+  } else {
+    this.d = file_contents;
+  }
   this.load_code_repo(this.d.mach.conf.repo.url).then(function(repo_stat) {
     const tag_count = repo_stat.tag_count;
     const obj_count = repo_stat.pack_obj_count;
     console.log('loaded repo with ' + tag_count + ' tags and ' + obj_count + ' objects');
-    this.ui_init();
+    this.init_ui();
     if('head' in this.d.mach.conf.repo) {
       this.git.load_object(this.d.mach.conf.repo.head).then(function(commit_obj) {
         this.now.head.id = this.d.mach.conf.repo.head;
@@ -634,8 +734,8 @@ _mach.prototype.load_project = function(json) {
 
             this.init_file_history();
             this.update_file_history();
-
             this.show_latest_version();
+            this.init_all_attribute_io_panels();
           }
         }.bind(this), function(err_tree) {
           mach.log('Error: failed to load tree contents (' + err_tree + ')');
@@ -709,6 +809,25 @@ _mach.prototype.get_node_val = function(tree, filepath) {
   return object_node;
 }
 
+_mach.prototype.load_text_file = function(text_file, callback_function) {
+  if (text_file) {
+    var text_reader = new FileReader();
+    text_reader.addEventListener( 'progress', function(e) {
+      this.log('Loading data from file : ' + text_file.name + ' ... ');
+    }.bind(this), false);
+
+    text_reader.addEventListener( 'error', function() {
+      show_message('Error loading data text file :  ' + text_file.name + ' !');
+      callback_function('');
+    }.bind(this), false);
+
+    text_reader.addEventListener( 'load', function() {
+      callback_function(text_reader.result);
+    }.bind(this), false);
+    text_reader.readAsText(text_file, 'utf-8');
+  }
+}
+
 //
 // log notifications for the user
 //
@@ -735,4 +854,280 @@ _mach.prototype.log_hide = function() {
   if ( this.log_clear_timer ) {
     clearTimeout(this.log_clear_timer);
   }
+}
+
+//
+// Manual annotation
+//
+_mach.prototype.init_all_attribute_io_panels = function() {
+  this.metadata_container.innerHTML = '';
+  for(const aindex in this.d.mach.conf.show_attributes) {
+    const aid = this.d.mach.conf.show_attributes[aindex];
+    const attribute_html_el = this.create_attribute_io_panel(aid);
+    this.metadata_container.appendChild(attribute_html_el);
+  }
+  this.init_metadata_shortcut_handler();
+}
+
+_mach.prototype.get_attribute_io_panel_id = function(aid) {
+  const attribute_io_panel_id = 'attribute_' + aid;
+  return attribute_io_panel_id;
+}
+
+_mach.prototype.update_attribute_io_panel = function(aid) {
+  const attribute_io_panel_id = this.get_attribute_io_panel_id(aid);
+  const old_fieldset = document.getElementById(attribute_io_panel_id);
+  const new_fieldset = this.create_attribute_io_panel(aid);
+  this.metadata_container.replaceChild(new_fieldset, old_fieldset);
+}
+
+_mach.prototype.create_attribute_io_panel = function(aid) {
+  const attribute_io_panel_id = this.get_attribute_io_panel_id(aid);
+  const fieldset = document.createElement('fieldset');
+  fieldset.setAttribute('id', attribute_io_panel_id);
+  const legend = document.createElement('legend');
+  legend.innerHTML = this.d.mach.conf.attributes[aid].name;
+  if(this.d.mach.conf.attributes[aid].hasOwnProperty('keyboard_shortcut_prefix')) {
+    const shortcut = this.d.mach.conf.attributes[aid]['keyboard_shortcut_prefix']
+    legend.innerHTML += '&nbsp;<span class="key">' + shortcut + '</span>&nbsp;';
+  }
+  fieldset.appendChild(legend);
+  for(var oid in this.d.mach.conf.attributes[aid].options) {
+    var oid_list = [oid];
+
+    if(this.d.mach.conf.attributes[aid].options[oid].hasOwnProperty('options')) {
+      const nested_options_el = this.init_nested_option(aid, oid_list);
+      fieldset.appendChild(nested_options_el);
+    } else {
+      const option_el = this.init_option(aid, oid_list);
+      fieldset.appendChild(option_el);
+    }
+  }
+  return fieldset;
+}
+
+_mach.prototype.init_nested_option = function(aid, oid_list) {
+  const details = document.createElement('details');
+  var attribute_option_node = this.d.mach.conf.attributes[aid];
+
+  for(const oindex in oid_list) {
+    const oid = oid_list[oindex];
+    attribute_option_node = attribute_option_node.options[oid]
+  }
+  const summary = document.createElement('summary');
+  summary.innerHTML = attribute_option_node['name'];
+  details.appendChild(summary)
+
+  const options_container = document.createElement('div');
+  options_container.setAttribute('class', 'options_container');
+  for(var oid in attribute_option_node.options) {
+    var new_oid_list = oid_list.slice(0);
+    new_oid_list.push(oid);
+
+    if(attribute_option_node.options[oid].hasOwnProperty('options')) {
+      const nested_options_el = this.init_nested_option(aid, new_oid_list);
+      options_container.appendChild(nested_options_el);
+    } else {
+      const option_el = this.init_option(aid, new_oid_list);
+      options_container.appendChild(option_el);
+    }
+  }
+  details.appendChild(options_container);
+  details.setAttribute('open', '');
+  return details;
+}
+
+_mach.prototype.init_option = function(aid, oid_list) {
+  var attribute_option_node = this.d.mach.conf.attributes[aid];
+  var shortcut_key_seq = [];
+  const has_shortcut = this.d.mach.conf.attributes[aid].hasOwnProperty('keyboard_shortcut_prefix');
+  if(has_shortcut) {
+    shortcut_key_seq.push( this.d.mach.conf.attributes[aid]['keyboard_shortcut_prefix'] );
+  }
+  for(const oindex in oid_list) {
+    const oid = oid_list[oindex];
+    shortcut_key_seq.push(oid);
+    attribute_option_node = attribute_option_node.options[oid];
+  }
+  const shortcut_key = shortcut_key_seq.join('.');
+
+  var input_type = this.d.mach.conf.attributes[aid].input_type;
+  if(attribute_option_node.hasOwnProperty('input_type')) {
+    input_type = attribute_option_node['input_type'];
+  }
+
+  const option_html_el = document.createElement('div');
+  option_html_el.setAttribute('class', 'option');
+  switch(input_type) {
+  case 'checkbox':
+    const label = document.createElement('label');
+    label.innerHTML = attribute_option_node;
+    if(has_shortcut) {
+      label.innerHTML += '&nbsp;<span class="key">' + shortcut_key + '</span>';
+    }
+
+    const input = document.createElement('input');
+    input.setAttribute('type', 'checkbox');
+    if(this.does_avalue_exist(aid)) {
+      const existing_avalue = this.get_current_avalue(aid);
+      const shortcut_key_id = shortcut_key_seq.slice(1).join('.'); // discard prefix
+      if(existing_avalue.includes(shortcut_key_id)) {
+        input.setAttribute('checked', '');
+      }
+    }
+    option_html_el.appendChild(input);
+    option_html_el.appendChild(label);
+  }
+  return option_html_el;
+}
+
+_mach.prototype.init_metadata_shortcut_handler = function() {
+  this.now.metadata.shortcut_prefix_list = {};
+  this.now.metadata.shortcut_ongoing = false;
+  this.now.metadata.shortcut_pressed_so_far = [];
+  for(const aindex in this.d.mach.conf.show_attributes) {
+    const aid = this.d.mach.conf.show_attributes[aindex];
+    if(this.d.mach.conf.attributes[aid].hasOwnProperty('keyboard_shortcut_prefix')) {
+      const shortcut_prefix = this.d.mach.conf.attributes[aid]['keyboard_shortcut_prefix'];
+      if(shortcut_prefix.length !== 1) {
+        this.log('Discarding attribute keyboard shortcut prefix "' + shortcut_prefix + '" for attribute [' + aid + ']');
+        continue;
+      }
+      if(shortcut_prefix in this.now.metadata.shortcut_prefix_list) {
+        this.log('Discarding duplicate attribute keyboard shortcut prefix "' + shortcut_prefix + '" for attribute [' + aid + ']');
+        continue;
+      }
+      this.now.metadata.shortcut_prefix_list[shortcut_prefix] = aid;
+    }
+  }
+}
+
+_mach.prototype.is_ongoing_shortcut_complete = function() {
+  const aid = this.now.metadata.ongoing_shortcut_aid;
+  const oid_list = this.now.metadata.shortcut_pressed_so_far;
+  var attribute_option_node = this.d.mach.conf.attributes[aid];
+  for(const oindex in oid_list) {
+    const oid = oid_list[oindex];
+    attribute_option_node = attribute_option_node.options[oid]
+  }
+  if(typeof(attribute_option_node) === 'string') {
+    return true;
+  } else {
+    return false;
+  }
+}
+
+_mach.prototype.is_ongoing_shortcut_valid = function() {
+  const aid = this.now.metadata.ongoing_shortcut_aid;
+  const oid_list = this.now.metadata.shortcut_pressed_so_far;
+  var attribute_option_node = this.d.mach.conf.attributes[aid];
+  for(const oindex in oid_list) {
+    const oid = oid_list[oindex];
+    if(!attribute_option_node.hasOwnProperty('options')) {
+      return false;
+    }
+    if(!attribute_option_node.options.hasOwnProperty(oid)) {
+      return false;
+    }
+    attribute_option_node = attribute_option_node.options[oid]
+  }
+  return true;
+}
+
+_mach.prototype.on_attribute_shortcut_complete = function() {
+  const aid = this.now.metadata.ongoing_shortcut_aid;
+  const oid_list = this.now.metadata.shortcut_pressed_so_far;
+  var attribute_option_node = this.d.mach.conf.attributes[aid];
+  for(const oindex in oid_list) {
+    const oid = oid_list[oindex];
+    attribute_option_node = attribute_option_node.options[oid]
+  }
+  const version = this.file_revision_list.selectedIndex;
+  const avalue = oid_list.join('.');
+  this.add_object_metadata(this.now.filepath, version, aid, avalue);
+  this.update_attribute_io_panel(aid);
+}
+
+_mach.prototype.add_object_metadata = function(filepath, version, aid, avalue) {
+  const history = this.object_node(filepath);
+  if( !(history[version].hasOwnProperty('metadata')) ) {
+    history[version]['metadata'] = {};
+  }
+
+  const ainput_type = this.d.mach.conf.attributes[aid]['input_type'];
+  if( !(history[version]['metadata'].hasOwnProperty(aid)) ) {
+    switch(ainput_type) {
+    case 'checkbox':
+      history[version]['metadata'][aid] = [];
+      break;
+    default:
+      console.error('add_object_metadata(): unknown input type' + ainput_type);
+    }
+  }
+
+  // set value
+  switch(ainput_type) {
+  case 'checkbox':
+    const existing_values = history[version]['metadata'][aid];
+    const avalue_index = existing_values.indexOf(avalue);
+    if(avalue_index === -1) {
+      history[version]['metadata'][aid].push(avalue);
+      this.log('Added ' + avalue + ' to ' + aid);
+    } else {
+      history[version]['metadata'][aid].splice(avalue_index, 1);
+      this.log('Removed ' + avalue + ' from ' + aid);
+    }
+    break;
+  }
+}
+
+_mach.prototype.does_avalue_exist = function(aid) {
+  const history = this.object_node(this.now.filepath);
+  const version = this.file_revision_list.selectedIndex;
+  if(history[version].hasOwnProperty('metadata') &&
+     history[version]['metadata'].hasOwnProperty(aid)) {
+    return true;
+  } else {
+    return false;
+  }
+}
+_mach.prototype.get_current_avalue = function(aid) {
+  const history = this.object_node(this.now.filepath);
+  const version = this.file_revision_list.selectedIndex;
+  return history[version]['metadata'][aid];
+}
+
+_mach.prototype.update_metadata_container = function() {
+  this.metadata_container.innerHTML = '';
+  for(const aindex in this.d.mach.conf.show_attributes) {
+    const aid = this.d.mach.conf.show_attributes[aindex];
+    const attribute_html_el = this.init_attribute_html(aid);
+    this.metadata_container.appendChild(attribute_html_el);
+  }
+  this.init_metadata_shortcut_handler();
+}
+
+//
+// help
+//
+
+_mach.prototype.show_help = function() {
+  var html = [];
+  html.push('<h2>' + this.MACH_NAME + ' (' + this.MACH_SHORT_NAME + ')</h2>');
+  html.push('<p>Version <a href="https://gitlab.com/thelinuxmaniac/mach">' + this.MACH_VERSION + '</a></p>');
+  html.push('<h4>Keyboard Shortcuts</h4>');
+  html.push('<table>');
+  for(var i=0; i<this.KEYBOARD_SHORTCUTS.length; ++i) {
+    var keys = [];
+    for(var j=0; j<this.KEYBOARD_SHORTCUTS[i][0].length; ++j) {
+      keys.push('<span class="key">' + this.KEYBOARD_SHORTCUTS[i][0][j] + '</span>');
+    }
+
+    const keys_desc = this.KEYBOARD_SHORTCUTS[i][1];
+    html.push('<tr><td>' + keys.join(' + ') + '</td><td>' + keys_desc + '</td></tr>');
+  }
+  html.push('</table>');
+
+  this.info_dialog_content.innerHTML = html.join('\n');
+  this.info_dialog.showModal();
 }

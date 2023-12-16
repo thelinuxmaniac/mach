@@ -1,0 +1,10 @@
+* mach-0.0.1
+  - release date: 2023-12-16
+  - project start date: 2023-09-23
+  - load git repository from pack files
+  - shows all files contained in latest version
+  - show all revisions of a file, highlight changes in each commit
+  - allows manual annotation of each revision of the selected file
+  - manual annotations can be saved as as JSON file (i.e. MACH project)
+  - keyboard shortcuts for rapid manual annotation
+  - load existing MACH projects saved a JSON file

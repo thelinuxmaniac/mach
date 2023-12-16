@@ -9,8 +9,8 @@ body { background-color: #808080; }
 #mach_container {
     background-color: #808080;
     display:grid;
-    grid-template-columns: 15vw 1fr;
-    grid-template-rows: 4em 65vh 1fr;
+    grid-template-columns: 10vw 1fr 35vw;
+    grid-template-rows: 1fr 94vh;
     height:98vh;
 }
 
@@ -18,7 +18,7 @@ body { background-color: #808080; }
     grid-column-start:1;
     grid-column-end:2;
     grid-row-start:1;
-    grid-row-end:4;
+    grid-row-end:3;
     overflow:scroll;
     margin-right:0.2em;
 }
@@ -54,7 +54,6 @@ body { background-color: #808080; }
     grid-column-end:3;
     grid-row-start:1;
     grid-row-end:2;
-    height:100%;
 }
 
 #mach_container .nav_container > .nav { padding:0.4em 0em; text-align:center; }
@@ -69,22 +68,48 @@ body { background-color: #808080; }
     box-sizing: border-box;
 }
 
-#mach_container .content_container .content_info { display:block; font-size:0.8em; color: #808080; background-color:#333333; border-bottom:1px solid #000000; padding:0.2em 0.5em; }
+#mach_container .content_container .content_info {
+    display:block;
+    font-size:0.8em;
+    color:#808080;
+    background-color:#333333;
+    border-bottom:1px solid #000000;
+    padding:0.2em 0.5em;
+}
+
 #mach_container .content_container .content_info :any-link { color:#808080; }
 #mach_container .content_container .content_info .sep { color: #111111; }
 
-#mach_container .content_container .content { box-sizing: border-box; display:inline-block; background-color:#333333; color:#f2f2f2; white-space:pre; unicode-bidi:embed; font-family: monospace; border:none; font-size:1em; width:100%; height:90%; overflow:scroll; padding:1em; }
+#mach_container .content_container .content {
+    box-sizing: border-box;
+    display:inline-block;
+    background-color:#333333;
+    color:#f2f2f2;
+    white-space:pre;
+    unicode-bidi:embed;
+    font-family: monospace;
+    border:none;
+    font-size:1.4em;
+    width:100%;
+    height:97%;
+    overflow:scroll;
+    padding:1em;
+}
 
 #mach_container .content_container .content ins { background-color: #d4fcbc; color:black; }
 #mach_container .content_container .content del { background-color: #D55E00; color:black; }
 
-#mach_container .annotation_container {
+#mach_container .metadata_container {
+    grid-column-start:3;
+    grid-column-end:4;
+    grid-row-start:1;
+    grid-row-end:3;
+    padding:1em;
     background-color: #CC79A7;
-    grid-column-start:2;
-    grid-column-end:3;
-    grid-row-start:3;
-    grid-row-end:4;
 }
+
+#mach_container .metadata_container .options_container { padding-left:1em; }
+#mach_container .metadata_container .option { line-height:1.6em; }
 
 /* Message Panel */
 #mach_container #log_container {
@@ -130,3 +155,7 @@ body { background-color: #808080; }
     border-radius: 3px;
     font-size: 1.2em;
 }
+
+#mach_container .info_dialog { width:60vw; }
+#mach_container .info_dialog > .toolbar { float:right; display:inline-block; font-size:0.8em; }
+#mach_container .info_dialog_content td { padding: 0.2em 1em; }

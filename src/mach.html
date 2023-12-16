@@ -17,7 +17,7 @@
   </body>
 
   <script src="external/diff-match-patch/diff_match_patch_uncompressed.js"></script>
-  <script src="git.js?v=5"></script>
+  <script src="git.js"></script>
   <script src="mach-debug-projects.js"></script>
   <script src="mach.js"></script>
 
@@ -34,36 +34,11 @@
     mach.init(mach_container);
 
     // for debugging
-    if(typeof(mach_debug_projects) === 'object') {
+    const DEBUG_MODE = false; // for debugging, set as true
+    if(DEBUG_MODE && typeof(mach_debug_projects) === 'object') {
       const mach_project = mach_debug_projects[0]
       mach.log('loading project ' + mach_project['mach']['project']['name']);
       mach.load_project(mach_project);
     }
-
-    /*
-
-    mach.load_code_repo(repo_url).then(function(repo_stat) {
-      const tag_count = repo_stat.tag_count;
-      const obj_count = repo_stat.pack_obj_count;
-      console.log('loaded repo with ' + tag_count + ' tags and ' + obj_count + ' objects');
-
-      mach.now.commit_id = SELECTED_COMMIT_ID;
-      mach.git.load_object(mach.now.commit_id).then(function(commit_obj) {
-        console.log('loaded commit ' + mach.now.commit_id)
-        mach.now.commit = mach.git.parse_commit_obj(commit_obj);
-        const tree_id = mach.now.commit['tree'];
-        mach.git.load_tree(tree_id, [], {}).then(function(tree) {
-          mach.now.tree = tree;
-          mach.update_source_tree();
-        }.bind(this), function(err_tree) {
-          mach.log('Error: failed to load tree contents (' + err_tree + ')');
-        }.bind(this));
-      }.bind(this), function(err_commit) {
-        mach.log('Error: failed to load commits (' + err_commit + ')');
-      }.bind(this));
-    }.bind(this), function(err_repo) {
-      mach.log('Error: ' + err_repo);
-    }.bind(this));
-    */
   </script>
 </html>
