@@ -313,7 +313,7 @@ _mach.prototype.show_file = function(filepath, version) {
       this.git.load_object(prev_id).then( function(prev_version_obj) {
         const prev_version = decoder.decode(prev_version_obj);
         var dmp = new diff_match_patch();
-        var diff = dmp.diff_main(current_version, prev_version);
+        var diff = dmp.diff_main( prev_version, current_version);
         dmp.diff_cleanupSemantic(diff);
         const diff_html = this.diff_to_html(diff);
         this.content.innerHTML = diff_html['html'];
@@ -362,22 +362,29 @@ _mach.prototype.load_next_parent = function(filepath, commit_id, file_content_id
         }
         new_file_content_id = tree_node;
 
-        if(new_file_content_id !== file_content_id) {
-          // found one parent
-          history.push({
-            'blob_id': new_file_content_id,
-            'commit': {
-              'id':commit_id,
-              'parent':commit['parent'],
-              'tree':commit['tree'],
-              'log':commit['log'],
-              'date':commit['author']['date'],
-              'author':commit['author']['name']
-            }
-          });
-          ok_callback(1);
-        } else {
-          // did not find a parent, continue search
+        if(new_file_content_id === file_content_id) {
+          // A file version can remain unchanged into multiple consecutive commits.
+          //
+          // For example, if a file has 3 versions, it commit history can be
+          // [ 1 1 1 2 2 2 2 2 2 2 3 3 3] (HEAD, i.e. latest version)
+          //         |           |
+          //        (commit0, commit1)
+          //       *             *        change recorded when traversing from HEAD
+          // We store commit0 so that we can correctly traverse from TAIL during
+          // manual annotation and show log corresponding to the commit when the
+          // change was introduced.
+
+          // update last history commit such that it points to the first commit
+          // that introduced the change
+          history[history.length - 1]['commit'] = {
+            'id': commit_id,
+            'parent':commit['parent'],
+            'tree':commit['tree'],
+            'log':commit['log'],
+            'date':commit['author']['date'],
+            'author':commit['author']['name']
+          }
+          // continue search as long as the commits have a parent
           if('parent' in commit) {
             const new_parent_id = commit['parent'];
             this.load_next_parent(filepath, new_parent_id, file_content_id).then(function(ok) {
@@ -392,6 +399,20 @@ _mach.prototype.load_next_parent = function(filepath, commit_id, file_content_id
           } else {
             ok_callback(0);
           }
+        } else {
+          // add an entry in history to allow the search to continue
+          history.push({
+            'blob_id': new_file_content_id,
+            'commit': {
+              'id':commit_id,
+              'parent':commit['parent'],
+              'tree':commit['tree'],
+              'log':commit['log'],
+              'date':commit['author']['date'],
+              'author':commit['author']['name']
+            }
+          });
+          ok_callback(1);
         }
       }.bind(this), function(err_tree) {
         console.error(err_tree);
@@ -410,7 +431,7 @@ _mach.prototype.load_all_parents = function(filepath) {
     const filepath_blob_id = history[history.length - 1]['blob_id'];
     this.load_next_parent(filepath, parent_id, filepath_blob_id).then(function(ok) {
       if(ok) {
-        const new_history =this.object_node(filepath);
+        const new_history = this.object_node(filepath);
         const new_history_count = new_history.length;
         if(new_history_count % this.HISTORY_LOAD_MSG_FREQ === 0) {
           const elapsed = (performance.now() - this.now.stat['history']['load_start'])/1000;
@@ -696,11 +717,26 @@ _mach.prototype.keydown_handler = function(e) {
     if(e.ctrlKey || e.shiftKey || e.altKey) {
       return;
     }
+    const shortcut_aid = this.now.metadata.shortcut_prefix_list[e.key];
+    const input_type = this.d.mach.conf.attributes[shortcut_aid].input_type;
+    switch(input_type) {
+    case 'checkbox':
     this.now.metadata.shortcut_ongoing = true;
-    this.now.metadata.ongoing_shortcut_aid = this.now.metadata.shortcut_prefix_list[e.key];
+    this.now.metadata.ongoing_shortcut_aid = shortcut_aid;
     this.now.metadata.shortcut_pressed_so_far = [];
-    this.log('Shortcut activated for attribute [' + this.now.metadata.ongoing_shortcut_aid + '] using <span class="key">' + e.key + '</span>');
+      this.log('Shortcut activated for attribute [' + this.now.metadata.ongoing_shortcut_aid + '] using <span class="key">' + e.key + '</span>');
+      break;
+    case 'textarea':
+      const textarea = document.getElementById(shortcut_aid + '_textarea');
+      this.log('Focus acquired by text input for ' + shortcut_aid);
+      textarea.focus();
+      e.preventDefault();
+      break;
+    default:
+      this.log('unknown input type = ' + input_type);
+    }
   }
+
   if( (e.key in ['1', '2', '3', '4', '5', '6', '7', '8', '9']) &&
       this.now.metadata.shortcut_ongoing) {
     this.now.metadata.shortcut_pressed_so_far.push(e.key);
@@ -961,16 +997,26 @@ _mach.prototype.create_attribute_io_panel = function(aid) {
     legend.innerHTML += '&nbsp;<span class="key">' + shortcut + '</span>&nbsp;';
   }
   fieldset.appendChild(legend);
-  for(var oid in this.d.mach.conf.attributes[aid].options) {
-    var oid_list = [oid];
 
-    if(this.d.mach.conf.attributes[aid].options[oid].hasOwnProperty('options')) {
-      const nested_options_el = this.init_nested_option(aid, oid_list);
-      fieldset.appendChild(nested_options_el);
-    } else {
-      const option_el = this.init_option(aid, oid_list);
-      fieldset.appendChild(option_el);
+  const input_type = this.d.mach.conf.attributes[aid].input_type;
+  switch(input_type) {
+  case 'checkbox':
+    for(var oid in this.d.mach.conf.attributes[aid].options) {
+      var oid_list = [oid];
+
+      if(this.d.mach.conf.attributes[aid].options[oid].hasOwnProperty('options')) {
+        const nested_options_el = this.init_nested_option(aid, oid_list);
+        fieldset.appendChild(nested_options_el);
+      } else {
+        const option_el = this.init_option(aid, oid_list);
+        fieldset.appendChild(option_el);
+      }
     }
+    break;
+  case 'textarea':
+    const option_el = this.init_option(aid, oid_list);
+    fieldset.appendChild(option_el);
+    break;
   }
   return fieldset;
 }
@@ -1031,21 +1077,40 @@ _mach.prototype.init_option = function(aid, oid_list) {
   case 'checkbox':
     const label = document.createElement('label');
     label.innerHTML = attribute_option_node;
-    if(has_shortcut) {
-      label.innerHTML += '&nbsp;<span class="key">' + shortcut_key + '</span>';
-    }
 
     const input = document.createElement('input');
     input.setAttribute('type', 'checkbox');
+    input.setAttribute('data-aid', aid);
+    input.setAttribute('data-oid-list', oid_list);
+    input.addEventListener('change', this.option_onchange.bind(this));
+    var shortcut_class = 'key';
     if(this.does_avalue_exist(aid)) {
       const existing_avalue = this.get_current_avalue(aid);
       const shortcut_key_id = shortcut_key_seq.slice(1).join('.'); // discard prefix
       if(existing_avalue.includes(shortcut_key_id)) {
         input.setAttribute('checked', '');
+        shortcut_class = 'key_pressed';
       }
     }
+    if(has_shortcut) {
+      label.innerHTML += '&nbsp;<span class="' + shortcut_class + '">' + shortcut_key + '</span>';
+    }
+
     option_html_el.appendChild(input);
     option_html_el.appendChild(label);
+    break;
+  case 'textarea':
+    const textarea = document.createElement('textarea');
+    textarea.setAttribute('id', aid + '_textarea');
+    textarea.setAttribute('data-aid', aid);
+    textarea.setAttribute('data-oid-list', oid_list);
+    textarea.addEventListener('change', this.option_onchange.bind(this));
+    if(this.does_avalue_exist(aid)) {
+      const existing_avalue = this.get_current_avalue(aid);
+      textarea.value = existing_avalue;
+    }
+    option_html_el.appendChild(textarea);
+    break;
   }
   return option_html_el;
 }
@@ -1106,11 +1171,6 @@ _mach.prototype.is_ongoing_shortcut_valid = function() {
 _mach.prototype.on_attribute_shortcut_complete = function() {
   const aid = this.now.metadata.ongoing_shortcut_aid;
   const oid_list = this.now.metadata.shortcut_pressed_so_far;
-  var attribute_option_node = this.d.mach.conf.attributes[aid];
-  for(const oindex in oid_list) {
-    const oid = oid_list[oindex];
-    attribute_option_node = attribute_option_node.options[oid]
-  }
   const version = this.file_revision_list.selectedIndex;
   const avalue = oid_list.join('.');
   this.add_object_metadata(this.now.filepath, version, aid, avalue);
@@ -1129,8 +1189,11 @@ _mach.prototype.add_object_metadata = function(filepath, version, aid, avalue) {
     case 'checkbox':
       history[version]['metadata'][aid] = [];
       break;
+    case 'textarea':
+      history[version]['metadata'][aid] = '';
+      break;
     default:
-      console.error('add_object_metadata(): unknown input type' + ainput_type);
+      console.error('add_object_metadata(): unknown input type ' + ainput_type);
     }
   }
 
@@ -1147,6 +1210,13 @@ _mach.prototype.add_object_metadata = function(filepath, version, aid, avalue) {
       this.log('Removed ' + avalue + ' from ' + aid);
     }
     break;
+  case 'textarea':
+    history[version]['metadata'][aid] = avalue;
+    this.log('Updated ' + aid);
+    break;
+  default:
+    console.error('unknown input type = ' + ainput_type);
+    return;
   }
 }
 
@@ -1174,6 +1244,28 @@ _mach.prototype.update_metadata_container = function() {
     this.metadata_container.appendChild(attribute_html_el);
   }
   this.init_metadata_shortcut_handler();
+}
+
+_mach.prototype.option_onchange = function(e) {
+  const aid = e.target.dataset['aid'];
+  const oid_list = e.target.dataset['oid_list'];
+  const version = this.file_revision_list.selectedIndex;
+  const input_type = this.d.mach.conf.attributes[aid].input_type;
+
+  var avalue;
+  switch(input_type) {
+  case 'checkbox':
+    avalue = oid_list.join('.');
+    break;
+  case 'textarea':
+    avalue = e.target.value;
+    break;
+  default:
+    console.error('unknown input type = ' + input_type);
+    return;
+  }
+  this.add_object_metadata(this.now.filepath, version, aid, avalue);
+  this.update_attribute_io_panel(aid);
 }
 
 //
