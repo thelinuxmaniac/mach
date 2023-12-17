@@ -288,25 +288,27 @@ _mach.prototype.show_file = function(filepath, version) {
   var info = [];
   info.push(filepath);
   info.push(history[version]['commit']['log'])
-  info.push( '<a target="_blank" href="' + this.d.mach.conf.repo.external_url_prefix.replace('$OBJECT_TYPE', 'commit').replace('$OBJECT_ID', history[version]['commit']['id']) + '">commit</a>' );
+  info.push( '<a target="_blank" href="' + this.d.mach.conf.repo.external_url_prefix.replace('$OBJECT_TYPE', 'blob').replace('$OBJECT_ID', history[version]['blob_id']) + '">blob</a>' );
+    info.push( '<a target="_blank" href="' + this.d.mach.conf.repo.external_url_prefix.replace('$OBJECT_TYPE', 'commit').replace('$OBJECT_ID', history[version]['commit']['id']) + '">commit</a>' );
 
   const id = history[version]['blob_id']
   this.git.load_object(id).then( function(current_version_obj) {
     const decoder = new TextDecoder('utf-8');
     const current_version = decoder.decode(current_version_obj);
     const MAX_VERSION = history.length - 1;
-    if(version === MAX_VERSION) {
+    if(version === 0) {
       // diff with previous version not possible
       // show content of only this version
-      this.content.innerHTML = current_version;
+      this.content.innerHTML = this.source_code_to_html(current_version);
+      info.push('(initial commit)');
       this.content_info.innerHTML = info.join('<span class="sep"> | </span>');
       if(history.length !== 1) {
-        this.log('loaded version ' + (version+1) + ' of file ' + name);
+        this.log('loaded version ' + (version+1) + ' of file ' + filepath);
       }
       this.init_all_attribute_io_panels();
       return;
     } else {
-      const prev_version = version + 1;
+      const prev_version = version - 1;
       const prev_id = history[prev_version]['blob_id'];
       this.git.load_object(prev_id).then( function(prev_version_obj) {
         const prev_version = decoder.decode(prev_version_obj);
@@ -328,7 +330,7 @@ _mach.prototype.show_file = function(filepath, version) {
         }
         info.push(add_count + '+ ' + del_count + '-');
         this.content_info.innerHTML = info.join('<span class="sep"> | </span>');
-        this.log('loaded version ' + (version+1) + ' of ' + this.now.filepath + '. Press <span class="key">Alt</span> + <span class="key">&uarr;</span> or <span class="key">&darr;</span> to show changes made in this revision.');
+        this.log('loaded version ' + (version+1) + ' of ' + filepath + '. Press <span class="key">Alt</span> + <span class="key">&uarr;</span> or <span class="key">&darr;</span> to show changes made in this revision.');
         this.init_all_attribute_io_panels();
       }.bind(this), function(err_prev) {
         this.log('Error loading previous version: ' + err_prev);
@@ -537,6 +539,15 @@ _mach.prototype.show_next_version = function(e) {
 _mach.prototype.show_file_version = function(e) {
   const version = this.file_revision_list.selectedIndex;
   this.show_file(this.now.filepath, version);
+}
+
+_mach.prototype.source_code_to_html = function(data) {
+  var pattern_amp = /&/g;
+  var pattern_lt = /</g;
+  var pattern_gt = />/g;
+  var pattern_para = /\n/g;
+
+  return data.replace(pattern_amp, '&amp;').replace(pattern_lt, '&lt;').replace(pattern_gt, '&gt;').replace(pattern_para, '<br/>');
 }
 
 // source: https://github.com/google/diff-match-patch/blob/62f2e689f498f9c92dbc588c58750addec9b1654/javascript/diff_match_patch_uncompressed.js#L1251C1-L1275C3
