@@ -58,7 +58,7 @@ body { background-color: #808080; }
 
 #mach_container .nav_container > .nav { padding:0.4em 0em; text-align:center; }
 #mach_container .nav_container > .nav button { margin:0 0.5em; }
-#mach_container .nav_container > .nav select { width:20em; }
+#mach_container .nav_container > .nav select { width:25em; }
 
 #mach_container .content_container {
     grid-column-start:2;
