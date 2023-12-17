@@ -81,6 +81,7 @@ function _mach() {
     [ ['&darr;'], 'Scroll down by one line for the current file' ],
     [ ['Alt', '&uarr;'], 'Jump to previous change in current file' ],
     [ ['Alt', '&darr;'], 'Jump to next change in current file' ],
+    [ ['Ctrl', 'File Click'], 'Load full file history, otherwise only load latest version' ],
   ];
 }
 
@@ -246,14 +247,32 @@ _mach.prototype.on_show_file = function(e) {
     this.show_latest_version();
     this.init_file_history();
     this.update_file_history();
-    console.log('DEBUG: loaded only latest version, avoiding loading history.')
-    //this.now.stat['history']['load_start'] = performance.now();
-    //this.load_all_parents(this.now.filepath);
   } else {
     // load existing history
-    this.show_latest_version();
+    this.show_oldest_version();
     this.init_file_history();
     this.update_file_history();
+  }
+
+  if(e.ctrlKey) {
+    this.now.stat['history']['load_start'] = performance.now();
+    this.load_all_parents(this.now.filepath).then( function(ok) {
+      this.now.stat['history']['load_end'] = performance.now();
+
+      // reverse the object history array such that the first element
+      // is oldest commit while the last element is the latest commit
+      this.reverse_object_history(this.now.filepath);
+      this.init_file_history();
+      this.update_file_history();
+      this.show_oldest_version();
+
+      const elapsed = (this.now.stat['history']['load_end'] - this.now.stat['history']['load_start'])/1000;
+      this.log('finished loading history in ' + elapsed + 'sec', true);
+    }.bind(this), function(err_load_parents) {
+      console.log('failed to load parents ' + err_load_parents);
+    }.bind(this));
+  } else {
+    this.log('Loading only latest version. To load full history, hold <span class="key">Ctrl</span> key and click on file.', true)
   }
 }
 
@@ -274,7 +293,9 @@ _mach.prototype.show_file = function(filepath, version) {
       // show content of only this version
       this.content.innerHTML = current_version;
       this.content_info.innerHTML = info.join('<span class="sep"> | </span>');
-      this.log('loaded initial version of file ' + name);
+      if(history.length !== 1) {
+        this.log('loaded version ' + (version+1) + ' of file ' + name);
+      }
       this.init_all_attribute_io_panels();
       return;
     } else {
@@ -300,7 +321,7 @@ _mach.prototype.show_file = function(filepath, version) {
         }
         info.push(add_count + '+ ' + del_count + '-');
         this.content_info.innerHTML = info.join('<span class="sep"> | </span>');
-        this.log('loaded file ' + name + ' (version ' + version + '). Press <span class="key">Alt</span> + <span class="key">&uarr;</span> or <span class="key">&darr;</span> to show changes made in this revision.');
+        this.log('loaded version ' + (version+1) + ' of ' + this.now.filepath + '. Press <span class="key">Alt</span> + <span class="key">&uarr;</span> or <span class="key">&darr;</span> to show changes made in this revision.');
         this.init_all_attribute_io_panels();
       }.bind(this), function(err_prev) {
         this.log('Error loading previous version: ' + err_prev);
@@ -397,9 +418,7 @@ _mach.prototype.load_all_parents = function(filepath) {
           console.error(err_load);
         }.bind(this));
       } else {
-        this.now.stat['history']['load_end'] = performance.now();
-        const elapsed = (this.now.stat['history']['load_end'] - this.now.stat['history']['load_start'])/1000;
-        this.log('finished loading history in ' + elapsed + 'sec');
+        ok_callback(0);
       }
     }.bind(this), function(err) {
       console.error(err);
@@ -447,13 +466,8 @@ _mach.prototype.update_file_history = function() {
     return;
   }
   const history_count = history.length;
-  const current_options = this.file_revision_list.options;
-  const options_length  = this.file_revision_list.options.length;
-  if(options_length === history_count) {
-    // nothing to update
-    return;
-  }
-  for(var i=options_length; i<history_count; ++i) {
+  this.file_revision_list.innerHTML = '';
+  for(var i=0; i<history_count; ++i) {
     const option = document.createElement('option');
     option.setAttribute('value', i);
     const date = new Date(history[i]['commit']['date']);
@@ -470,32 +484,32 @@ _mach.prototype.update_file_history = function() {
     });
 
     const commit_id = history[i]['commit']['id'].substring(0, 5);
-    option.innerHTML = '[' + i + ' of ' + history_count + '] ' + date_str + ' ' + time_str + ' (' + commit_id + ')';
+    option.innerHTML = '[' + (i+1) + ' of ' + history_count + '] ' + date_str + ' ' + time_str + ' (' + commit_id + ')';
     this.file_revision_list.appendChild(option);
   }
 }
 
-_mach.prototype.show_oldest_version = function(e) {
+_mach.prototype.show_latest_version = function(e) {
   const history = this.object_node(this.now.filepath);
   const history_count = history.length;
-  const oldest_version = history_count - 1;
-  this.file_revision_list.selectedIndex = oldest_version;
-  this.show_file(this.now.filepath, oldest_version);
-}
-
-_mach.prototype.show_latest_version = function(e) {
-  const latest_version = 0;
+  const latest_version = history_count - 1;
   this.file_revision_list.selectedIndex = latest_version;
   this.show_file(this.now.filepath, latest_version);
+}
+
+_mach.prototype.show_oldest_version = function(e) {
+  const oldest_version = 0;
+  this.file_revision_list.selectedIndex = oldest_version;
+  this.show_file(this.now.filepath, oldest_version);
 }
 
 _mach.prototype.show_prev_version = function(e) {
   const history = this.object_node(this.now.filepath);
   const history_count = history.length;
   const version = this.file_revision_list.selectedIndex;
-  prev_version = version + 1;
-  if(prev_version >= history_count) {
-    prev_version = 0;
+  prev_version = version - 1;
+  if(prev_version < 0) {
+    prev_version = history_count - 1;
   }
   this.file_revision_list.selectedIndex = prev_version;
   this.show_file(this.now.filepath, prev_version);
@@ -505,9 +519,9 @@ _mach.prototype.show_next_version = function(e) {
   const history = this.object_node(this.now.filepath);
   const history_count = history.length;
   const version = this.file_revision_list.selectedIndex;
-  next_version = version - 1;
-  if(next_version < 0) {
-    next_version = history_count - 1;
+  next_version = version + 1;
+  if(next_version >= history_count) {
+    next_version = 0;
   }
   this.file_revision_list.selectedIndex = next_version;
   this.show_file(this.now.filepath, next_version);
@@ -695,7 +709,9 @@ _mach.prototype.save_project = function() {
   if(filename === '') {
     filename = 'mach-' + this.d['mach']['project']['id'].substr(0,6) + '.json';
   }
-  var blob = new Blob( [JSON.stringify(this.d)],
+  const replacer = null;
+  const space = 2;
+  var blob = new Blob( [JSON.stringify(this.d, replacer, space)],
                        { type: 'text/json;charset=utf-8' } );
   this.save_data_to_local_file(blob, filename);
 }
@@ -728,14 +744,21 @@ _mach.prototype.load_project = function(file_contents) {
           this.now.head.tree = tree;
           mach.show_source_tree(this.now.head.tree);
           if('filepath' in this.d.mach.conf.repo) {
-            this.now.filepath = this.d.mach.conf.repo.filepath;
-            var filepath_li = document.getElementById(this.now.filepath);
+            const filepath = this.d.mach.conf.repo.filepath;
+            var filepath_li = document.getElementById(filepath);
             filepath_li.scrollIntoView();
 
             this.init_file_history();
             this.update_file_history();
-            this.show_latest_version();
-            this.init_all_attribute_io_panels();
+            const history = this.object_node(filepath);
+            if(history.length) {
+              // load existing history
+              this.now.filepath = this.d.mach.conf.repo.filepath;
+              this.init_file_history();
+              this.update_file_history();
+              this.show_oldest_version();
+              this.init_all_attribute_io_panels();
+            }
           }
         }.bind(this), function(err_tree) {
           mach.log('Error: failed to load tree contents (' + err_tree + ')');
@@ -798,6 +821,22 @@ _mach.prototype.object_node = function(filepath) {
     object_node = object_node[ filepath_tok[i] ];
   }
   return object_node;
+}
+
+_mach.prototype.reverse_object_history = function(filepath) {
+  const filepath_tok = filepath.split('/');
+  var object_node = this.d.object;
+  for(var i=0; i<filepath_tok.length; ++i) {
+    if( !object_node.hasOwnProperty(filepath_tok[i]) ) {
+      if(i === (filepath_tok.length - 1)) {
+        object_node[ filepath_tok[i] ] = [];
+      } else {
+        object_node[ filepath_tok[i] ] = {};
+      }
+    }
+    object_node = object_node[ filepath_tok[i] ];
+  }
+  object_node.reverse();
 }
 
 _mach.prototype.get_node_val = function(tree, filepath) {
