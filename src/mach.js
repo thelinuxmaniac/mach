@@ -36,6 +36,12 @@ function _mach() {
           'head': '',
           'filepath': ''
         },
+        'attributes': {}
+      },
+      'preferences': {
+        'visible_attributes':[],
+        'filepath':'',
+        'version':-1
       },
       "mach_project_file_format_version": 1
     },
@@ -277,6 +283,7 @@ _mach.prototype.on_show_file = function(e) {
 }
 
 _mach.prototype.show_file = function(filepath, version) {
+  this.d.mach.preferences.version = version;
   const history = this.object_node(filepath);
   var info = [];
   info.push(filepath);
@@ -527,7 +534,7 @@ _mach.prototype.show_next_version = function(e) {
   this.show_file(this.now.filepath, next_version);
 }
 
-_mach.prototype.show_file_version = function() {
+_mach.prototype.show_file_version = function(e) {
   const version = this.file_revision_list.selectedIndex;
   this.show_file(this.now.filepath, version);
 }
@@ -705,10 +712,13 @@ _mach.prototype.keydown_handler = function(e) {
 // MACH project i/o
 //
 _mach.prototype.save_project = function() {
-  var filename = this.d['mach']['project']['name'];
-  if(filename === '') {
-    filename = 'mach-' + this.d['mach']['project']['id'].substr(0,6) + '.json';
-  }
+  const now = new Date();
+  const fn = [];
+  fn.push('mach');
+  fn.push( this.d['mach']['project']['id'].substr(0,6) );
+  fn.push( now.getFullYear() + ('0' + (now.getMonth()+1)).slice(-2) + ('0' + now.getDate()).slice(-2) );
+  fn.push( ('0' + now.getHours()).slice(-2) + ('0' + now.getMinutes()).slice(-2) );
+  const filename = fn.join('-') + '.json';
   const replacer = null;
   const space = 2;
   var blob = new Blob( [JSON.stringify(this.d, replacer, space)],
@@ -743,8 +753,8 @@ _mach.prototype.load_project = function(file_contents) {
         this.git.load_tree(tree_id, [], {}).then(function(tree) {
           this.now.head.tree = tree;
           mach.show_source_tree(this.now.head.tree);
-          if('filepath' in this.d.mach.conf.repo) {
-            const filepath = this.d.mach.conf.repo.filepath;
+          if('filepath' in this.d.mach.preferences) {
+            const filepath = this.d.mach.preferences.filepath;
             var filepath_li = document.getElementById(filepath);
             filepath_li.scrollIntoView();
 
@@ -753,10 +763,19 @@ _mach.prototype.load_project = function(file_contents) {
             const history = this.object_node(filepath);
             if(history.length) {
               // load existing history
-              this.now.filepath = this.d.mach.conf.repo.filepath;
+              this.now.filepath = filepath;
               this.init_file_history();
               this.update_file_history();
-              this.show_oldest_version();
+              if(this.d.mach.preferences.hasOwnProperty('version')) {
+                const version = this.d.mach.preferences.version;
+                if(version === -1) {
+                } else {
+                  this.file_revision_list.selectedIndex = version;
+                  this.show_file_version();
+                }
+              } else {
+                this.show_oldest_version();
+              }
               this.init_all_attribute_io_panels();
             }
           }
@@ -900,8 +919,8 @@ _mach.prototype.log_hide = function() {
 //
 _mach.prototype.init_all_attribute_io_panels = function() {
   this.metadata_container.innerHTML = '';
-  for(const aindex in this.d.mach.conf.show_attributes) {
-    const aid = this.d.mach.conf.show_attributes[aindex];
+  for(const aindex in this.d.mach.preferences.visible_attributes) {
+    const aid = this.d.mach.preferences.visible_attributes[aindex];
     const attribute_html_el = this.create_attribute_io_panel(aid);
     this.metadata_container.appendChild(attribute_html_el);
   }
@@ -1024,8 +1043,8 @@ _mach.prototype.init_metadata_shortcut_handler = function() {
   this.now.metadata.shortcut_prefix_list = {};
   this.now.metadata.shortcut_ongoing = false;
   this.now.metadata.shortcut_pressed_so_far = [];
-  for(const aindex in this.d.mach.conf.show_attributes) {
-    const aid = this.d.mach.conf.show_attributes[aindex];
+  for(const aindex in this.d.mach.preferences.visible_attributes) {
+    const aid = this.d.mach.preferences.visible_attributes[aindex];
     if(this.d.mach.conf.attributes[aid].hasOwnProperty('keyboard_shortcut_prefix')) {
       const shortcut_prefix = this.d.mach.conf.attributes[aid]['keyboard_shortcut_prefix'];
       if(shortcut_prefix.length !== 1) {
@@ -1138,8 +1157,8 @@ _mach.prototype.get_current_avalue = function(aid) {
 
 _mach.prototype.update_metadata_container = function() {
   this.metadata_container.innerHTML = '';
-  for(const aindex in this.d.mach.conf.show_attributes) {
-    const aid = this.d.mach.conf.show_attributes[aindex];
+  for(const aindex in this.d.mach.preferences.visible_attributes) {
+    const aid = this.d.mach.preferences.visible_attributes[aindex];
     const attribute_html_el = this.init_attribute_html(aid);
     this.metadata_container.appendChild(attribute_html_el);
   }
