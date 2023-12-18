@@ -738,7 +738,7 @@ _mach.prototype.keydown_handler = function(e) {
     }
   }
 
-  if( (e.key in ['1', '2', '3', '4', '5', '6', '7', '8', '9']) &&
+  if( (['1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(e.key)) &&
       this.now.metadata.shortcut_ongoing) {
     this.now.metadata.shortcut_pressed_so_far.push(e.key);
     const keypress_sofar = this.now.metadata.shortcut_pressed_so_far.join('.');
