@@ -760,6 +760,7 @@ _mach.prototype.keydown_handler = function(e) {
 // MACH project i/o
 //
 _mach.prototype.save_project = function() {
+  this.d.mach.project.updated = Date.now();
   const now = new Date();
   const fn = [];
   fn.push('mach');
