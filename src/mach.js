@@ -721,6 +721,7 @@ _mach.prototype.keydown_handler = function(e) {
     const input_type = this.d.mach.conf.attributes[shortcut_aid].input_type;
     switch(input_type) {
     case 'checkbox':
+    case 'radio':
     this.now.metadata.shortcut_ongoing = true;
     this.now.metadata.ongoing_shortcut_aid = shortcut_aid;
     this.now.metadata.shortcut_pressed_so_far = [];
@@ -1013,6 +1014,19 @@ _mach.prototype.create_attribute_io_panel = function(aid) {
       }
     }
     break;
+  case 'radio':
+    for(var oid in this.d.mach.conf.attributes[aid].options) {
+      var oid_list = [oid];
+
+      if(this.d.mach.conf.attributes[aid].options[oid].hasOwnProperty('options')) {
+        const nested_options_el = this.init_nested_option(aid, oid_list);
+        fieldset.appendChild(nested_options_el);
+      } else {
+        const option_el = this.init_option(aid, oid_list);
+        fieldset.appendChild(option_el);
+      }
+    }
+    break;
   case 'textarea':
     const option_el = this.init_option(aid, oid_list);
     fieldset.appendChild(option_el);
@@ -1075,11 +1089,38 @@ _mach.prototype.init_option = function(aid, oid_list) {
   option_html_el.setAttribute('class', 'option');
   switch(input_type) {
   case 'checkbox':
-    const label = document.createElement('label');
+    var label = document.createElement('label');
     label.innerHTML = attribute_option_node;
 
-    const input = document.createElement('input');
+    var input = document.createElement('input');
     input.setAttribute('type', 'checkbox');
+    input.setAttribute('data-aid', aid);
+    input.setAttribute('data-oid-list', oid_list);
+    input.addEventListener('change', this.option_onchange.bind(this));
+    var shortcut_class = 'key';
+    if(this.does_avalue_exist(aid)) {
+      const existing_avalue = this.get_current_avalue(aid);
+      const shortcut_key_id = shortcut_key_seq.slice(1).join('.'); // discard prefix
+      if(existing_avalue.includes(shortcut_key_id)) {
+        input.setAttribute('checked', '');
+        shortcut_class = 'key_pressed';
+      }
+    }
+    if(has_shortcut) {
+      label.innerHTML += '&nbsp;<span class="' + shortcut_class + '">' + shortcut_key + '</span>';
+    }
+
+    option_html_el.appendChild(input);
+    option_html_el.appendChild(label);
+    break;
+  case 'radio':
+    option_html_el.classList.add('inline');
+    var label = document.createElement('label');
+    label.innerHTML = attribute_option_node;
+
+    var input = document.createElement('input');
+    input.setAttribute('type', 'radio');
+    input.setAttribute('name', aid);
     input.setAttribute('data-aid', aid);
     input.setAttribute('data-oid-list', oid_list);
     input.addEventListener('change', this.option_onchange.bind(this));
@@ -1189,6 +1230,9 @@ _mach.prototype.add_object_metadata = function(filepath, version, aid, avalue) {
     case 'checkbox':
       history[version]['metadata'][aid] = [];
       break;
+    case 'radio':
+      history[version]['metadata'][aid] = '';
+      break;
     case 'textarea':
       history[version]['metadata'][aid] = '';
       break;
@@ -1209,6 +1253,10 @@ _mach.prototype.add_object_metadata = function(filepath, version, aid, avalue) {
       history[version]['metadata'][aid].splice(avalue_index, 1);
       this.log('Removed ' + avalue + ' from ' + aid);
     }
+    break;
+  case 'radio':
+    history[version]['metadata'][aid] = avalue;
+    this.log('Added ' + avalue + ' to ' + aid);
     break;
   case 'textarea':
     history[version]['metadata'][aid] = avalue;
@@ -1255,6 +1303,9 @@ _mach.prototype.option_onchange = function(e) {
   var avalue;
   switch(input_type) {
   case 'checkbox':
+    avalue = oid_list.join('.');
+    break;
+  case 'radio':
     avalue = oid_list.join('.');
     break;
   case 'textarea':
