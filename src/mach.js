@@ -741,7 +741,7 @@ _mach.prototype.keydown_handler = function(e) {
     }
   }
 
-  if( (['1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(e.key)) &&
+  if( (['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(e.key)) &&
       this.now.metadata.shortcut_ongoing) {
     this.now.metadata.shortcut_pressed_so_far.push(e.key);
     const keypress_sofar = this.now.metadata.shortcut_pressed_so_far.join('.');
@@ -1032,6 +1032,7 @@ _mach.prototype.create_attribute_io_panel = function(aid) {
     }
     break;
   case 'textarea':
+    var oid_list = [];
     const option_el = this.init_option(aid, oid_list);
     fieldset.appendChild(option_el);
     break;
@@ -1091,15 +1092,20 @@ _mach.prototype.init_option = function(aid, oid_list) {
 
   const option_html_el = document.createElement('div');
   option_html_el.setAttribute('class', 'option');
+  const oid_list_str = oid_list.join('.')
+  const option_id = aid + '_' + oid_list_str;
+
   switch(input_type) {
   case 'checkbox':
     var label = document.createElement('label');
     label.innerHTML = attribute_option_node;
+    label.setAttribute('for', option_id);
 
     var input = document.createElement('input');
+    input.setAttribute('id', option_id);
     input.setAttribute('type', 'checkbox');
     input.setAttribute('data-aid', aid);
-    input.setAttribute('data-oid-list', oid_list);
+    input.setAttribute('data-oid_list', oid_list_str);
     input.addEventListener('change', this.option_onchange.bind(this));
     var shortcut_class = 'key';
     if(this.does_avalue_exist(aid)) {
@@ -1121,12 +1127,13 @@ _mach.prototype.init_option = function(aid, oid_list) {
     option_html_el.classList.add('inline');
     var label = document.createElement('label');
     label.innerHTML = attribute_option_node;
+    label.setAttribute('for', option_id);
 
     var input = document.createElement('input');
     input.setAttribute('type', 'radio');
     input.setAttribute('name', aid);
     input.setAttribute('data-aid', aid);
-    input.setAttribute('data-oid-list', oid_list);
+    input.setAttribute('data-oid_list', oid_list_str);
     input.addEventListener('change', this.option_onchange.bind(this));
     var shortcut_class = 'key';
     if(this.does_avalue_exist(aid)) {
@@ -1148,7 +1155,7 @@ _mach.prototype.init_option = function(aid, oid_list) {
     const textarea = document.createElement('textarea');
     textarea.setAttribute('id', aid + '_textarea');
     textarea.setAttribute('data-aid', aid);
-    textarea.setAttribute('data-oid-list', oid_list);
+    textarea.setAttribute('data-oid_list', oid_list_str);
     textarea.addEventListener('change', this.option_onchange.bind(this));
     if(this.does_avalue_exist(aid)) {
       const existing_avalue = this.get_current_avalue(aid);
@@ -1307,10 +1314,10 @@ _mach.prototype.option_onchange = function(e) {
   var avalue;
   switch(input_type) {
   case 'checkbox':
-    avalue = oid_list.join('.');
+    avalue = oid_list;
     break;
   case 'radio':
-    avalue = oid_list.join('.');
+    avalue = oid_list;
     break;
   case 'textarea':
     avalue = e.target.value;
