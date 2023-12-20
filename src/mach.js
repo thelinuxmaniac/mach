@@ -490,6 +490,9 @@ _mach.prototype.init_file_history = function() {
 }
 
 _mach.prototype.update_file_history = function() {
+  if(this.now.filepath === '') {
+    return;
+  }
   const filepath = this.now.filepath
   var history = this.object_node(filepath);
   if(history.length === 0) {
