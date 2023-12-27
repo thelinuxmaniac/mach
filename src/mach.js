@@ -1,9 +1,9 @@
 /*
 
-Maintains the state of HTML user interface for the MACH application.
+  Maintains the state of HTML user interface for the MACH application.
 
-Author : Abhishek Dutta <https://abhishekdutta.org>
-Date   : 2023-Oct-08
+  Author : Abhishek Dutta <https://abhishekdutta.org>
+  Date   : 2023-Oct-08
 
 */
 function _mach() {
@@ -87,6 +87,8 @@ function _mach() {
     [ ['&darr;'], 'Scroll down by one line for the current file' ],
     [ ['Alt', '&uarr;'], 'Jump to previous change in current file' ],
     [ ['Alt', '&darr;'], 'Jump to next change in current file' ],
+    [ ['Shift', '&uarr;'], 'Scroll up the metadata panel' ],
+    [ ['Shift', '&darr;'], 'Scroll down the metadata panel' ],
     [ ['Ctrl', 'File Click'], 'Load full file history, otherwise only load latest version' ],
   ];
 }
@@ -289,7 +291,7 @@ _mach.prototype.show_file = function(filepath, version) {
   info.push(filepath);
   info.push(history[version]['commit']['log'])
   info.push( '<a target="_blank" href="' + this.d.mach.conf.repo.external_url_prefix.replace('$OBJECT_TYPE', 'blob').replace('$OBJECT_ID', history[version]['blob_id']) + '">blob</a>' );
-    info.push( '<a target="_blank" href="' + this.d.mach.conf.repo.external_url_prefix.replace('$OBJECT_TYPE', 'commit').replace('$OBJECT_ID', history[version]['commit']['id']) + '">commit</a>' );
+  info.push( '<a target="_blank" href="' + this.d.mach.conf.repo.external_url_prefix.replace('$OBJECT_TYPE', 'commit').replace('$OBJECT_ID', history[version]['commit']['id']) + '">commit</a>' );
 
   const id = history[version]['blob_id']
   this.git.load_object(id).then( function(current_version_obj) {
@@ -706,10 +708,18 @@ _mach.prototype.keydown_handler = function(e) {
       e.preventDefault();
       return;
     } else {
-      if(e.key === 'ArrowUp') {
-        this.content.scrollBy(0, -10);
+      if(e.shiftKey) {
+        if(e.key === 'ArrowUp') {
+          this.metadata_container.scrollBy(0, -10);
+        } else {
+          this.metadata_container.scrollBy(0, 10);
+        }
       } else {
-        this.content.scrollBy(0, 10);
+        if(e.key === 'ArrowUp') {
+          this.content.scrollBy(0, -10);
+        } else {
+          this.content.scrollBy(0, 10);
+        }
       }
       e.preventDefault();
       return;
