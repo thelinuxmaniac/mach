@@ -347,11 +347,12 @@ _git.prototype.parse_pack_object = function(array_buffer) {
   return new Promise( function(ok_callback, err_callback) {
     this.pack_obj_array_buffer = array_buffer;
 
-    const pack_obj_header = new Uint32Array(array_buffer);
-
     const PACK_HEADER_SIZE = 12; // bytes
     const PACK_SIGNATURE = 1346454347;
     const PACK_VERSION = 2;
+
+    const pack_obj_header = new Uint32Array(array_buffer.slice(0, PACK_HEADER_SIZE));
+
     if(pack_obj_header[0] !== this.htonl(PACK_SIGNATURE)) {
       err_callback('malformed pack file header: expected=' + PACK_SIGNATURE + ', received=' + pack_obj_header[0]);
       return;
@@ -367,6 +368,7 @@ _git.prototype.parse_pack_object = function(array_buffer) {
       err_callback('mismatch between pack object count in index file and object file!');
       return;
     }
+
     this.pack_obj_uint8_arr = new Uint8Array(this.pack_obj_array_buffer);
 
     // load all object metadata
