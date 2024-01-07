@@ -269,6 +269,7 @@ _mach.prototype.on_show_file = function(e) {
 
       // reverse the object history array such that the first element
       // is oldest commit while the last element is the latest commit
+      console.log('reversing history')
       this.reverse_object_history(this.now.filepath);
       this.init_file_history();
       this.update_file_history();
@@ -437,7 +438,7 @@ _mach.prototype.load_all_parents = function(filepath) {
         const new_history_count = new_history.length;
         if(new_history_count % this.HISTORY_LOAD_MSG_FREQ === 0) {
           const elapsed = (performance.now() - this.now.stat['history']['load_start'])/1000;
-          this.log('So far, loaded ' + new_history_count + ' history in ' + elapsed + 'sec.');
+          this.log('So far, loaded ' + new_history_count + ' history in ' + elapsed.toFixed(1) + 'sec.');
           this.update_file_history();
         }
         this.load_all_parents(filepath).then(function(ok) {
