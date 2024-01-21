@@ -400,6 +400,7 @@ _mach.prototype.load_next_parent = function(filepath, commit_id, file_content_id
               console.error(err_next);
             }.bind(this));
           } else {
+            delete history[history.length - 1]['commit']['parent'];
             ok_callback(0);
           }
         } else {
@@ -415,7 +416,12 @@ _mach.prototype.load_next_parent = function(filepath, commit_id, file_content_id
               'author':commit['author']['name']
             }
           });
-          ok_callback(1);
+          if('parent' in commit) {
+            ok_callback(1);
+          } else {
+            delete history[history.length - 1]['commit']['parent'];
+            ok_callback(0);
+          }
         }
       }.bind(this), function(err_tree) {
         console.error(err_tree);
