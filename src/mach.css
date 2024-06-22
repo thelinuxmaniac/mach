@@ -143,10 +143,13 @@ body {
     grid-column-end:4;
     grid-row-start:1;
     grid-row-end:3;
-    margin:0 1em; 
+    margin:0 1em;
     padding:1em;
     background-color:#333333;
     color:#f2f2f2;
+    height:97%;
+    overflow:scroll;
+    font-size:1em;
 }
 
 #mach_container .metadata_container fieldset {
@@ -172,7 +175,7 @@ body {
 }
 #mach_container .metadata_container .option textarea {
     width:100%;
-    height:30em;
+    height:20em;
     font-size:1em;
     background-color:inherit;
     border:none;

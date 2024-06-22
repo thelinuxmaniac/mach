@@ -1,3 +1,10 @@
+* mach-0.0.2
+  - release date: 2024-06-22
+  - support for textarea input type in attributes
+  - support for attributes with input_type=radio
+  - various changes to improve user experience (see git log for more details)
+  - created this release to put MACH out in public so that others can use it as well
+
 * mach-0.0.1
   - release date: 2023-12-16
   - project start date: 2023-09-23

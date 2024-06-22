@@ -1,0 +1,37 @@
+{
+  'object': {
+    'dir1': {
+      'filename1': [
+        { // revision 0
+          'file_content_id':'',
+          'commit_id':'',
+          'annotation': {
+          }
+        },
+        {}, // revision 1
+      ],
+      'filename2': [
+      ],
+      '...': [
+      ],
+      'filenameK': [
+      ]
+    },
+    'dir2': {
+    }
+  },
+  'commit': [
+    {
+      'id': '',
+      'annotation': {
+      }
+    }, // commit-0 revision
+    {}, // commit-1 revision
+  ],
+  'tree': [
+    {
+      'id': '',
+      'annotation': {
+      }
+  ]
+}
